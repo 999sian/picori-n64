@@ -182,7 +182,19 @@ void VBlankIntrWait(void) {
 }
 void SoftReset(u32 resetFlags) { (void)resetFlags; }
 void RegisterRamReset(u32 resetFlags) { (void)resetFlags; }
-void BgAffineSet(struct BgAffineSrcData* src, struct BgAffineDstData* dest, s32 count) { (void)src; (void)dest; (void)count; }
+/* BgAffineSet (SWI 0x0E) — scale-only (matches the PC port_bios.c impl; the title
+ * sword passes alpha=0). Was a no-op, so the sword's BG2 affine matrix was never
+ * computed and the title swoop-in animation stalled. */
+void BgAffineSet(struct BgAffineSrcData* src, struct BgAffineDstData* dest, s32 count) {
+    for (s32 i = 0; i < count; i++) {
+        dest[i].pa = src[i].sx;
+        dest[i].pb = 0;
+        dest[i].pc = 0;
+        dest[i].pd = src[i].sy;
+        dest[i].dx = src[i].texX - src[i].scrX * src[i].sx;
+        dest[i].dy = src[i].texY - src[i].scrY * src[i].sy;
+    }
+}
 void ObjAffineSet(struct ObjAffineSrcData* src, void* dest, s32 count, s32 offset) { (void)src; (void)dest; (void)count; (void)offset; }
 
 /* ===== 2. ROM / asset data (filled by the Phase-3 boot loader) ========= */
