@@ -96,9 +96,8 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up gameplay-reach (demo save->TASK_GAME). OFF: room load now reaches
-                           * frame render but crashes in the (stubbed) sprite-animation subsystem;
-                           * default boots to the stable title. Flip to 1 to keep working it. */
+int g_n64_autoplay = 0;   /* bring-up gameplay-reach. ON: gameplay now RUNS (HUD renders, room data
+                           * resolves) but room tilemap not yet drawn; default boots to the stable title. */
 int g_n64_rdp_obj  = 0;   /* RDP OBJ/sprite path: OFF (implemented, not yet verified
                            * on a real sprite frame — title is OBJ-off, file-select is
                            * affine→software. Flip to 1 once a gameplay-reach harness
@@ -327,7 +326,7 @@ void Port_N64_VBlank(void) {
             debugf("[dbg] f=%u task=%u dispcnt=%04x hofs0=%04x vofs0=%04x render_us=%lu\n",
                    s_dbgf, (unsigned)gMain.task, dispcnt, h0, v0, (unsigned long)s_render_us);
         }
-        if (s_dbgf == 64u) {   /* one-shot ASCII framebuffer thumbnail (both paths) */
+        if (s_dbgf == 300u) {   /* one-shot ASCII framebuffer thumbnail at a gameplay frame */
             static const char ramp[] = " .:-=+*#%@";
             data_cache_hit_writeback_invalidate(disp->buffer, (unsigned long)disp->stride * 240u);
             const uint32_t* fbuf = (const uint32_t*)disp->buffer;

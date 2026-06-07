@@ -187,7 +187,15 @@ const unsigned char gUnk_080FC3E4[2048] = {0};
 
 void* Port_GetSpriteAnimationData(u32 a) { (void)a; return 0; }
 void* Port_GetMapAssetDataByIndex(u32 a) { (void)a; return 0; }
-int Port_IsRoomHeaderPtrReadable(u32 a) { (void)a; return 0; }
+/* #N64: real check (the asset-loader impl is excluded). A RoomHeader (0xA bytes)
+ * is readable if it lies fully inside the cart ROM image. Returning 0 here made
+ * GetAreaRoomHeaderTable reject every area -> no room ever loaded (black room). */
+int Port_IsRoomHeaderPtrReadable(const void* ptr) {
+    extern unsigned char* gRomData; extern unsigned int gRomSize;
+    const unsigned char* p = (const unsigned char*)ptr;
+    if (p == 0 || gRomData == 0) return 0;
+    return (p >= gRomData && p + 0xA <= gRomData + gRomSize) ? 1 : 0;
+}
 int Port_IsLoadedAssetBytes(const void* p, u32 n) { (void)p; (void)n; return 0; }
 int  Port_LoadPaletteGroupFromAssets(u32 a) { (void)a; return 0; }
 int  Port_LoadGfxGroupFromAssets(u32 a) { (void)a; return 0; }

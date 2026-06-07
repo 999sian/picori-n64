@@ -187,7 +187,7 @@ index fb8ee35b..b00f5b1a 100644
  
  /*
 diff --git a/port/port_rom.c b/port/port_rom.c
-index e22c0803..18882bbe 100644
+index e22c0803..71d65d0f 100644
 --- a/port/port_rom.c
 +++ b/port/port_rom.c
 @@ -15,7 +15,9 @@
@@ -352,7 +352,19 @@ index e22c0803..18882bbe 100644
      /* gPalette_549 — Mt Crenel weather-change reads a 26-palette contiguous
       * block starting here. Copy it out of gGlobalGfxAndPalettes (offset 0x44A0
       * — same relative position on USA and EU because the palette ordering in
-@@ -1257,6 +1323,10 @@ void Port_LoadRom(const char* path) {
+@@ -1171,7 +1237,11 @@ void Port_LoadRom(const char* path) {
+                 u32 resolvedCount = 0;
+                 for (u32 i = 0; i < SPRITE_ANIM_322_COUNT; i++) {
+                     u32 gbaPtr;
++#ifdef TMC_N64
++                    gbaPtr = RomLE32(animTable + i * 4); /* raw memcpy reads byte-swapped on BE N64 */
++#else
+                     memcpy(&gbaPtr, animTable + i * 4, 4);
++#endif
+                     if (gbaPtr == 0) {
+                         break;
+                     }
+@@ -1257,6 +1327,10 @@ void Port_LoadRom(const char* path) {
          u32 mapDataSize = gRomSize - R->mapDataBase;
          if (mapDataSize > 0xE00000u)
              mapDataSize = 0xE00000u;
@@ -436,6 +448,44 @@ index b67ca34c..ad83a45d 100644
      for (int i = 0; i < 16; i++) {
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
+diff --git a/src/gameUtils.c b/src/gameUtils.c
+index 215c24f8..1a6437ee 100644
+--- a/src/gameUtils.c
++++ b/src/gameUtils.c
+@@ -699,6 +699,15 @@ void InitAllRoomResInfo(void) {
+ }
+ 
+ void InitRoomResInfo(RoomResInfo* info, RoomHeader* r_hdr, u32 area, u32 room) {
++#ifdef TMC_N64
++    RoomHeader n64hdr = *r_hdr;   /* #N64: swap LE ROM u16 fields (else wrong tileSet_id -> black room) */
++    n64hdr.map_x        = __builtin_bswap16(n64hdr.map_x);
++    n64hdr.map_y        = __builtin_bswap16(n64hdr.map_y);
++    n64hdr.pixel_width  = __builtin_bswap16(n64hdr.pixel_width);
++    n64hdr.pixel_height = __builtin_bswap16(n64hdr.pixel_height);
++    n64hdr.tileSet_id   = __builtin_bswap16(n64hdr.tileSet_id);
++    r_hdr = &n64hdr;
++#endif
+     info->map_x = r_hdr->map_x;
+     info->map_y = r_hdr->map_y;
+     info->pixel_width = r_hdr->pixel_width;
+@@ -821,6 +830,17 @@ void sub_08052FF4(u32 area, u32 room) {
+ #endif
+         return;
+     }
++#ifdef TMC_N64
++    /* #N64: RoomHeader is little-endian ROM data; its u16 fields read byte-swapped on the
++     * big-endian N64 — a wrong tileSet_id loads no room tiles (black room). Swap a local copy. */
++    RoomHeader n64hdr = *r_hdr;
++    n64hdr.map_x        = __builtin_bswap16(n64hdr.map_x);
++    n64hdr.map_y        = __builtin_bswap16(n64hdr.map_y);
++    n64hdr.pixel_width  = __builtin_bswap16(n64hdr.pixel_width);
++    n64hdr.pixel_height = __builtin_bswap16(n64hdr.pixel_height);
++    n64hdr.tileSet_id   = __builtin_bswap16(n64hdr.tileSet_id);
++    r_hdr = &n64hdr;
++#endif
+ 
+     gArea.currentRoomInfo.map_x = r_hdr->map_x;
+     gArea.currentRoomInfo.map_y = r_hdr->map_y;
 diff --git a/src/room.c b/src/room.c
 index f546ec3b..4c276982 100644
 --- a/src/room.c
