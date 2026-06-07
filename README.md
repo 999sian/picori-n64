@@ -101,13 +101,16 @@ live verification of BG scroll, the OBJ path, affine BG, audio, save, and file-s
 **Foundation progress / the remaining chain** (the in-progress `BIG_ENDIAN` task —
 each fix reveals the next unswapped read, verified by walking the crash backtrace):
 - ✅ `EntityData` fields (`room.c::LoadRoomEntity`) — byte-swapped (`type2/xPos/yPos/spritePtr`).
-- ⏳ Area→room property/header resolution for some areas (e.g. area 72/Deepwood Shrine):
-  `gArea.pCurrentRoomInfo->properties` comes back NULL → `sub_0804AFB0` derefs it.
-  (`ReadAreaSubTableEntry`/`Port_ReadPackedRomPtr` are endian-safe, so this is an
-  area-table/room-header data-resolution issue to chase next.)
-- ⏳ Other room-data structs read directly from ROM: `TileEntity`, `MinecartData`, `ArmosData`.
-- ⏳ Room callbacks (props 4–7) — handled by the `Port_GetRoomFuncProp` shadow table; verify coverage on N64.
-- ⏳ The bulk: every entity's own ROM-struct reads (sprite frames, animation data, enemy params).
+- 🩹 `sub_0804AFB0` now guards `properties == NULL` (WIP scaffold) so room load no longer
+  crashes there — but the *root* (area-72 `gArea.pCurrentRoomInfo->properties` resolving
+  NULL) is still open. With this, room load proceeds **all the way into frame rendering**.
+- ⛔ **Next major blocker — the sprite-animation subsystem is unwired**, not just
+  endian-broken: room render reaches `ui.c::ItemUIElement` → `sub_0801CAB8` with a NULL
+  `Frame*` because `Port_GetSpriteAnimationData` (`n64_glue.c`) is **stubbed to return 0**.
+  Every sprite/UI/entity that needs an animation frame hits this. Wiring it (resolve
+  sprite frames/animation data from ROM, endian-correct) is its own substantial piece.
+- ⏳ Then: `RoomHeader` u16 fields (room dimensions), `TileEntity`/`MinecartData`/`ArmosData`
+  direct reads, room callbacks (props 4–7 via `Port_GetRoomFuncProp`), and the per-entity ROM reads.
 
 Until this chain is complete, the gated gameplay-reach harness is **off** by default and
 the ROM boots to the stable title; the RDP scroll/OBJ/affine work above is staged and ready.

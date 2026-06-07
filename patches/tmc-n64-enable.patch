@@ -437,7 +437,7 @@ index b67ca34c..ad83a45d 100644
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
 diff --git a/src/room.c b/src/room.c
-index f546ec3b..2eba5934 100644
+index f546ec3b..4c276982 100644
 --- a/src/room.c
 +++ b/src/room.c
 @@ -72,6 +72,19 @@ Entity* LoadRoomEntity(const EntityData* dat) {
@@ -460,6 +460,23 @@ index f546ec3b..2eba5934 100644
  
      kind = dat->kind & 0xF;
      if ((dat->flags & 0xF0) == 0x50 && DeepFindEntityByID(kind, dat->id))
+@@ -329,6 +342,16 @@ static bool32 IsRoomPropertyListInRom(void** properties) {
+ 
+ void sub_0804AFB0(void** properties) {
+     u32 i;
++#ifdef TMC_N64
++    /* #N64: when the area/room property table doesn't resolve (ROM-struct endianness
++     * still being worked through the room-load chain), `properties` is NULL — guard the
++     * deref so room load continues (no entities) to BG rendering instead of crashing@0. */
++    if (properties == NULL) {
++        for (i = 0; i < 8; ++i) gRoomVars.properties[i] = NULL;
++        gCurrentRoomProperties = NULL;
++        return;
++    }
++#endif
+ 
+     gCurrentRoomProperties = properties;
+     for (i = 0; i < 8; ++i) {
 diff --git a/src/title.c b/src/title.c
 index f7b7813b..0d447183 100644
 --- a/src/title.c
