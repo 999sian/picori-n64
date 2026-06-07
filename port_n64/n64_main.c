@@ -96,9 +96,9 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up gameplay-reach (demo save -> TASK_GAME). OFF: room load
-                           * crashes on ROM-struct endianness (see docs/n64-port-plan.md);
-                           * default boot stays on the stable title. Flip to 1 to debug gameplay. */
+int g_n64_autoplay = 0;   /* bring-up gameplay-reach (demo save -> TASK_GAME). OFF: room load still
+                           * crashes deeper in the ROM-struct endianness chain (EntityData done;
+                           * area/room-table + per-entity reads remain). Flip to 1 to keep working it. */
 int g_n64_rdp_obj  = 0;   /* RDP OBJ/sprite path: OFF (implemented, not yet verified
                            * on a real sprite frame — title is OBJ-off, file-select is
                            * affine→software. Flip to 1 once a gameplay-reach harness

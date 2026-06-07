@@ -98,5 +98,19 @@ axis" the plan calls *"a multi-month effort, not a fix-shaped change"*, and it's
 reason the port has never gone past title/intro.** It gates gameplay, and therefore the
 live verification of BG scroll, the OBJ path, affine BG, audio, save, and file-select.
 
+**Foundation progress / the remaining chain** (the in-progress `BIG_ENDIAN` task —
+each fix reveals the next unswapped read, verified by walking the crash backtrace):
+- ✅ `EntityData` fields (`room.c::LoadRoomEntity`) — byte-swapped (`type2/xPos/yPos/spritePtr`).
+- ⏳ Area→room property/header resolution for some areas (e.g. area 72/Deepwood Shrine):
+  `gArea.pCurrentRoomInfo->properties` comes back NULL → `sub_0804AFB0` derefs it.
+  (`ReadAreaSubTableEntry`/`Port_ReadPackedRomPtr` are endian-safe, so this is an
+  area-table/room-header data-resolution issue to chase next.)
+- ⏳ Other room-data structs read directly from ROM: `TileEntity`, `MinecartData`, `ArmosData`.
+- ⏳ Room callbacks (props 4–7) — handled by the `Port_GetRoomFuncProp` shadow table; verify coverage on N64.
+- ⏳ The bulk: every entity's own ROM-struct reads (sprite frames, animation data, enemy params).
+
+Until this chain is complete, the gated gameplay-reach harness is **off** by default and
+the ROM boots to the stable title; the RDP scroll/OBJ/affine work above is staged and ready.
+
 See [`tmc/docs/n64-port-plan.md`](https://github.com/999sian/tmc/blob/master/docs/n64-port-plan.md)
 for the full porting plan and phase status.

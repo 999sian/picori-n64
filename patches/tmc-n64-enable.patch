@@ -436,6 +436,30 @@ index b67ca34c..ad83a45d 100644
      for (int i = 0; i < 16; i++) {
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
+diff --git a/src/room.c b/src/room.c
+index f546ec3b..2eba5934 100644
+--- a/src/room.c
++++ b/src/room.c
+@@ -72,6 +72,19 @@ Entity* LoadRoomEntity(const EntityData* dat) {
+ #ifndef NON_MATCHING
+     asm("" ::: "r5");
+ #endif
++#ifdef TMC_N64
++    /* #N64: EntityData lives in little-endian ROM; its multi-byte fields read
++     * byte-swapped on the big-endian N64 (dat->spritePtr came back as 0x14DD0F08
++     * = bswap of 0x080FDD14, crashing room load). Swap into a local copy used both
++     * for the reads below and for the MemCopy into the entity (read back natively).
++     * The u8 fields (kind/flags/id/type) are unaffected. */
++    EntityData n64sw = *dat;
++    n64sw.type2     = __builtin_bswap32(n64sw.type2);
++    n64sw.xPos      = __builtin_bswap16(n64sw.xPos);
++    n64sw.yPos      = __builtin_bswap16(n64sw.yPos);
++    n64sw.spritePtr = __builtin_bswap32(n64sw.spritePtr);
++    dat = &n64sw;
++#endif
+ 
+     kind = dat->kind & 0xF;
+     if ((dat->flags & 0xF0) == 0x50 && DeepFindEntityByID(kind, dat->id))
 diff --git a/src/title.c b/src/title.c
 index f7b7813b..0d447183 100644
 --- a/src/title.c
