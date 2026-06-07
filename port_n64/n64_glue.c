@@ -152,16 +152,21 @@ static void Lz77Decompress(const void* src, void* dest) {
         }
     }
 }
-/* dest is a raw GBA address (e.g. VRAM 0x06000000) and src is usually a native
- * cart pointer (&gGlobalGfxAndPalettes[..]) but may be a GBA address too.
- * Resolve both to native pointers before decompressing, exactly as the PC
- * port_bios.c versions do — without this, compressed gfx/tilemaps decompress to
- * the literal GBA address and never reach gVram (black screen, #N64). */
+/* Resolve only literal GBA addresses (< 0x80000000). Already-native pointers —
+ * KSEG0 RAM like gMapData/gEwram (LoadMapData passes these via Port_ResolveEwramPtr
+ * and &gMapData) and KSEG1 cart pointers — pass straight through; Lz77Decompress
+ * itself DMAs a cart src. WITHOUT this guard, LoadMapData's native dest/src were
+ * double-resolved into garbage so room maps/tilesets decompressed nowhere (black
+ * room); literal GBA-address callers (e.g. VRAM 0x06000000) still resolve. */
+static const void* n64_lz77_addr(const void* p) {
+    uintptr_t a = (uintptr_t)p;
+    return (a >= 0x80000000u) ? p : (const void*)port_resolve_addr(a);
+}
 void LZ77UnCompWram(const void* src, void* dest) {
-    Lz77Decompress(port_resolve_addr((uintptr_t)src), port_resolve_addr((uintptr_t)dest));
+    Lz77Decompress(n64_lz77_addr(src), (void*)n64_lz77_addr(dest));
 }
 void LZ77UnCompVram(const void* src, void* dest) {
-    Lz77Decompress(port_resolve_addr((uintptr_t)src), port_resolve_addr((uintptr_t)dest));
+    Lz77Decompress(n64_lz77_addr(src), (void*)n64_lz77_addr(dest));
 }
 
 void Port_N64_VBlank(void); /* defined in n64_main.c: pad pump + display pacing */

@@ -96,8 +96,7 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up gameplay-reach. ON: gameplay now RUNS (HUD renders, room data
-                           * resolves) but room tilemap not yet drawn; default boots to the stable title. */
+int g_n64_autoplay = 0;   /* bring-up; ON to continue room-render work */
 int g_n64_rdp_obj  = 0;   /* RDP OBJ/sprite path: OFF (implemented, not yet verified
                            * on a real sprite frame — title is OBJ-off, file-select is
                            * affine→software. Flip to 1 once a gameplay-reach harness
@@ -325,6 +324,25 @@ void Port_N64_VBlank(void) {
             unsigned v0 = *(volatile unsigned short*)(gIoMem + 0x12);
             debugf("[dbg] f=%u task=%u dispcnt=%04x hofs0=%04x vofs0=%04x render_us=%lu\n",
                    s_dbgf, (unsigned)gMain.task, dispcnt, h0, v0, (unsigned long)s_render_us);
+        }
+        if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
+            for (int bg = 0; bg < 4; bg++) {
+                unsigned cnt = *(volatile unsigned short*)(gIoMem + 0x08 + bg * 2);
+                unsigned scr = ((cnt >> 8) & 0x1Fu) * 0x800u;
+                unsigned nz = 0;
+                for (unsigned o = 0; o < 0x800u; o += 2)
+                    if ((unsigned)gVram[scr + o] | ((unsigned)gVram[scr + o + 1] << 8)) nz++;
+                debugf("[bg] BG%d cnt=%04x scrbase=%05x nonzero_map_entries=%u/1024\n", bg, cnt, scr, nz);
+            }
+        if (s_dbgf == 300u) {   /* #N64: pinpoint the gMapBottom->gBG1Buffer->VRAM chain break */
+            extern unsigned char gEwram[];
+            unsigned bg1=0, sp=0;
+            for (unsigned o = 0; o < 0x800u; o += 2) {
+                if (gEwram[0x21F30 + o] | gEwram[0x21F31 + o]) bg1++;   /* gBG1Buffer */
+                if (gEwram[0x19EE0 + o] | gEwram[0x19EE1 + o]) sp++;     /* gMapDataBottomSpecial */
+            }
+            debugf("[buf] gBG1Buffer_nz=%u gMapDataBottomSpecial_nz=%u\n", bg1, sp);
+        }
         }
         if (s_dbgf == 300u) {   /* one-shot ASCII framebuffer thumbnail at a gameplay frame */
             static const char ramp[] = " .:-=+*#%@";
