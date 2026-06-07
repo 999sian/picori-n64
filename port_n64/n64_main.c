@@ -97,10 +97,9 @@ static uint16_t sObjPlttBE[256];
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
 int g_n64_autoplay = 0;   /* bring-up: ON drops into the (now-rendering) demo room; default = stable title */
-int g_n64_rdp_obj  = 0;   /* RDP OBJ/sprite path: OFF (implemented, not yet verified
-                           * on a real sprite frame — title is OBJ-off, file-select is
-                           * affine→software. Flip to 1 once a gameplay-reach harness
-                           * confirms it; until then OBJ frames use software.) */
+int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
+                           * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
+                           * fall back to software via Port_N64_RDP_FrameSupported. */
 static uint8_t  sCharScratch[0x8000] __attribute__((aligned(16)));
 static uint16_t sRdpTlut[256]        __attribute__((aligned(16)));
 
