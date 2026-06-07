@@ -71,5 +71,32 @@ or upstream the gated edits into the `tmc` fork and shrink the patch accordingly
 
 ## Status
 
+**Boots and renders the title/intro correctly** (USA, ares-accurate colors). Working:
+SDL-free libdragon boot, cart DMA + symbol resolution, N64 pad → input, RDP-accelerated
+mode-0 BG rendering with a software (ViruaPPU) fallback, and 32bpp VI output.
+
+### Renderer (RDP) — implemented this round
+- **BG scrolling** (`BGxHOFS/VOFS`, sub-tile offset), **multi-screenblock sizes**
+  (256/512), and **per-tile H/V flip** in the RDP path (`port_n64/n64_main.c`).
+  *Code-complete but not yet live-verified* — see the gameplay blocker below.
+- **LZ77 cart→RDRAM DMA** (`port_n64/n64_glue.c`): the GBA decompressor read the
+  compressed stream one byte at a time from the uncached cart (thousands of PI-bus
+  reads per tileset → multi-second room loads on emulator *and* hardware). It now
+  DMAs the stream into RDRAM once and decompresses from there. Real fix, kept regardless.
+- A gated **gameplay-reach harness** (`g_n64_autoplay`, demo-save → `TASK_GAME`) for
+  bring-up. **Default OFF** — it currently leads into the blocker below.
+
+### The gameplay blocker (root-caused)
+Reaching `TASK_GAME` **crashes in room load** (`GameMain_InitRoom` →
+`InitializeEntities`, exception @ 0). Root cause: **ROM-overlaid structs are read with
+the wrong byte order on the big-endian N64.** The room property / entity data in ROM is
+little-endian; reading e.g. `dat->spritePtr` natively yields `0x14DD0F08` — the
+byte-swap of the valid GBA pointer `0x080FDD14` — so `ResolveRomPtr` rejects it and the
+engine jumps to 0. This is *not* a localized fix: every multi-byte field of every
+ROM-resident struct touched at runtime needs byte-swapping. It's the large "BIG_ENDIAN
+axis" the plan calls *"a multi-month effort, not a fix-shaped change"*, and it's **the
+reason the port has never gone past title/intro.** It gates gameplay, and therefore the
+live verification of BG scroll, the OBJ path, affine BG, audio, save, and file-select.
+
 See [`tmc/docs/n64-port-plan.md`](https://github.com/999sian/tmc/blob/master/docs/n64-port-plan.md)
-for the porting plan, phase status, the RDP-offload work, and the external-resource notes.
+for the full porting plan and phase status.

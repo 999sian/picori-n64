@@ -19,6 +19,14 @@
 #include <stdarg.h>
 #include <setjmp.h>
 
+#ifdef TMC_N64
+/* libdragon PI DMA + cache ops (declared, not via <libdragon.h>, to avoid type
+ * clashes with the game headers above). */
+extern void dma_read(void* ram_address, unsigned long pi_address, unsigned long len);
+extern void data_cache_hit_writeback_invalidate(volatile void* addr, unsigned long length);
+static u8 sLz77DmaBuf[0x18000] __attribute__((aligned(16))); /* 96KB cart->RDRAM stage */
+#endif
+
 /* src/main.c (under PC_PORT) arms a soft-reset longjmp target defined in
  * port_bios.c — which is excluded from the N64 build. Provide the storage here;
  * on N64 the reset path is never taken (setjmp returns 0, flag is just armed). */
@@ -106,6 +114,25 @@ void CpuSet(const void* src, void* dest, u32 control) {
  * groups of 8; bit set = backref (len=(b0>>4)+3, disp=((b0&0xF)<<8|b1)+1). */
 static void Lz77Decompress(const void* src, void* dest) {
     const u8* s = (const u8*)src;
+#ifdef TMC_N64
+    /* An uncached cart src means the decompressor reads it one byte at a time over
+     * the PI bus — thousands of slow reads that stall every room load (and hurt
+     * real hardware). DMA the whole compressed stream into RDRAM once, decompress
+     * from there. (Falls through to the direct path for the rare oversized blob.) */
+    {
+        uint32_t phys = (uint32_t)((uintptr_t)src & 0x1FFFFFFFu);
+        if (phys >= 0x10000000u && phys < 0x1FC00000u) {
+            u32 dsz  = (u32)s[1] | ((u32)s[2] << 8) | ((u32)s[3] << 16); /* decompressed size */
+            u32 need = 4u + dsz + (dsz >> 3) + 32u;  /* header + worst-case LZ77 + pad */
+            if (need <= sizeof sLz77DmaBuf) {
+                need = (need + 15u) & ~15u;
+                data_cache_hit_writeback_invalidate(sLz77DmaBuf, need);
+                dma_read(sLz77DmaBuf, phys, need);
+                s = sLz77DmaBuf;
+            }
+        }
+    }
+#endif
     u8* d = (u8*)dest;
     u32 size = (u32)s[1] | ((u32)s[2] << 8) | ((u32)s[3] << 16);
     s += 4;

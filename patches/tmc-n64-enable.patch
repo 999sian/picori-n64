@@ -1,5 +1,5 @@
 diff --git a/include/entity.h b/include/entity.h
-index 887757c9c..30e4c6b60 100644
+index 887757c9..30e4c6b6 100644
 --- a/include/entity.h
 +++ b/include/entity.h
 @@ -224,8 +224,14 @@ typedef struct Entity_ {
@@ -18,7 +18,7 @@ index 887757c9c..30e4c6b60 100644
      /*    */ } palette;
      /*0x1b*/ struct PACKED SpriteOrientation {
 diff --git a/include/gba/types.h b/include/gba/types.h
-index 38540405e..c0150f453 100644
+index 38540405..c0150f45 100644
 --- a/include/gba/types.h
 +++ b/include/gba/types.h
 @@ -5,11 +5,23 @@
@@ -46,7 +46,7 @@ index 38540405e..c0150f453 100644
  
  typedef volatile u8 vu8;
 diff --git a/include/global.h b/include/global.h
-index f4a6cc2b8..cbb15d68a 100644
+index f4a6cc2b..cbb15d68 100644
 --- a/include/global.h
 +++ b/include/global.h
 @@ -124,7 +124,11 @@
@@ -121,7 +121,7 @@ index f4a6cc2b8..cbb15d68a 100644
  
  #if defined(_MSC_VER) && !defined(__clang__) && !defined(__GNUC__)
 diff --git a/port/port_audio.h b/port/port_audio.h
-index 3b9ab6617..066ae9b4c 100644
+index 3b9ab661..066ae9b4 100644
 --- a/port/port_audio.h
 +++ b/port/port_audio.h
 @@ -3,7 +3,9 @@
@@ -135,7 +135,7 @@ index 3b9ab6617..066ae9b4c 100644
  bool Port_Audio_Init(void);
  void Port_Audio_Shutdown(void);
 diff --git a/port/port_gameplay_stubs.c b/port/port_gameplay_stubs.c
-index 1f2ad7b9e..eae735957 100644
+index 1f2ad7b9..eae73595 100644
 --- a/port/port_gameplay_stubs.c
 +++ b/port/port_gameplay_stubs.c
 @@ -22,7 +22,7 @@
@@ -148,7 +148,7 @@ index 1f2ad7b9e..eae735957 100644
  #define PORT_HAVE_EXECINFO 1
  #else
 diff --git a/port/port_gba_mem.h b/port/port_gba_mem.h
-index fb8ee35bb..b00f5b1ae 100644
+index fb8ee35b..b00f5b1a 100644
 --- a/port/port_gba_mem.h
 +++ b/port/port_gba_mem.h
 @@ -56,10 +56,26 @@ static inline void* gba_TryMemPtr(uint32_t addr) {
@@ -187,7 +187,7 @@ index fb8ee35bb..b00f5b1ae 100644
  
  /*
 diff --git a/port/port_rom.c b/port/port_rom.c
-index e22c0803c..18882bbef 100644
+index e22c0803..18882bbe 100644
 --- a/port/port_rom.c
 +++ b/port/port_rom.c
 @@ -15,7 +15,9 @@
@@ -364,7 +364,7 @@ index e22c0803c..18882bbef 100644
          fprintf(stderr, "gMapData loaded (%u bytes from ROM offset 0x%X).\n", mapDataSize, R->mapDataBase);
      }
 diff --git a/port/port_types.h b/port/port_types.h
-index ba38afbd3..328632ca7 100644
+index ba38afbd..328632ca 100644
 --- a/port/port_types.h
 +++ b/port/port_types.h
 @@ -12,12 +12,20 @@
@@ -389,7 +389,7 @@ index ba38afbd3..328632ca7 100644
  
  typedef volatile u8 vu8;
 diff --git a/src/fade.c b/src/fade.c
-index b67ca34c0..ad83a45df 100644
+index b67ca34c..ad83a45d 100644
 --- a/src/fade.c
 +++ b/src/fade.c
 @@ -42,6 +42,17 @@ static const u32 sFadeTableOffsets[NUM_FADE_BRIGHTNESS][3] = {
@@ -436,3 +436,61 @@ index b67ca34c0..ad83a45df 100644
      for (int i = 0; i < 16; i++) {
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
+diff --git a/src/title.c b/src/title.c
+index f7b7813b..0d447183 100644
+--- a/src/title.c
++++ b/src/title.c
+@@ -79,7 +79,7 @@ static const u16 sLightRaysAlphaBlends[] = {
+ #define FLAG_BYTE(bank, flag) (((bank) + (flag)) >> 3)
+ #define FLAG_X(flag) (1 << ((flag) & 7))
+ 
+-#ifdef DEMO_JP
++#if defined(DEMO_JP) || defined(TMC_N64) /* #N64: skip the (host-dep) file-select; demo save -> gameplay */
+ static const SaveFile gDemoSave = {
+     .initialized = 1,
+     .msg_speed = 1,
+@@ -113,6 +113,7 @@ static const SaveFile gDemoSave = {
+         [22] = 0x40,
+     },
+     .flags = {
++#ifdef DEMO_JP /* #N64: USA flag enums aren't integer-constant array indices; N64 starts flags=0 */
+         [FLAG_BYTE(FLAG_BANK_G, START)] = FLAG_X(START) | FLAG_X(EZERO_1ST) | FLAG_X(TABIDACHI),
+         [FLAG_BYTE(FLAG_BANK_G, OUTDOOR)] = FLAG_X(OUTDOOR),
+         [FLAG_BYTE(FLAG_BANK_G, ENTRANCE_0)] = FLAG_X(ENTRANCE_0),
+@@ -126,6 +127,10 @@ static const SaveFile gDemoSave = {
+         [FLAG_BYTE(FLAG_BANK_2, M_PRIEST_TALK)] = FLAG_X(M_PRIEST_TALK) | FLAG_X(M_ELDER_TALK1ST) | FLAG_X(M_PRIEST_MOVE),
+         [FLAG_BYTE(FLAG_BANK_2, KOBITO_MORI_1ST)] = FLAG_X(KOBITO_MORI_1ST),
+         [FLAG_BYTE(FLAG_BANK_5, LV1_0B_WALK)] = FLAG_X(LV1_0B_WALK),
++#endif
++#if defined(TMC_N64) && !defined(DEMO_JP)
++        [0] = 0,
++#endif
+     },
+ };
+ static const u8 unk[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0,
+@@ -463,7 +468,7 @@ static void HandleTitlescreenAnimationIntro(void) {
+ }
+ static void ExitTitlescreen(void) {
+     if (!gFadeControl.active) {
+-#ifdef DEMO_JP
++#if defined(DEMO_JP) || defined(TMC_N64)
+         MemCopy(&gDemoSave, &gSave, sizeof(gSave));
+         SetTask(TASK_GAME);
+ #else
+@@ -472,6 +477,16 @@ static void ExitTitlescreen(void) {
+     }
+ }
+ 
++#if defined(TMC_N64) && !defined(DEMO_JP)
++/* #N64: file-select is host-dependent and not yet compiled. The bring-up harness
++ * (port/n64/n64_main.c) calls this after a few title frames to drop straight into
++ * gameplay via the demo save, bypassing the title intro/input state machine. */
++void Port_N64_ForceGameStart(void) {
++    MemCopy(&gDemoSave, &gSave, sizeof(gSave));
++    SetTask(TASK_GAME);
++}
++#endif
++
+ static u32 GetAdvanceState(void) {
+     u32 newKeys;
+ 

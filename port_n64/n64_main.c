@@ -96,7 +96,9 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up: tap START at title to reach file-select */
+int g_n64_autoplay = 0;   /* bring-up gameplay-reach (demo save -> TASK_GAME). OFF: room load
+                           * crashes on ROM-struct endianness (see docs/n64-port-plan.md);
+                           * default boot stays on the stable title. Flip to 1 to debug gameplay. */
 int g_n64_rdp_obj  = 0;   /* RDP OBJ/sprite path: OFF (implemented, not yet verified
                            * on a real sprite frame — title is OBJ-off, file-select is
                            * affine→software. Flip to 1 once a gameplay-reach harness
@@ -183,6 +185,14 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         unsigned bgcnt = *(volatile unsigned short*)(gIoMem + 0x08 + bg * 2);
         uint32_t char_base   = ((bgcnt >> 2) & 3u) * 0x4000u;
         uint32_t screen_base = ((bgcnt >> 8) & 0x1Fu) * 0x800u;
+        unsigned size  = (bgcnt >> 14) & 3u;         /* 0:256 1:512w 2:512h 3:512sq */
+        unsigned map_w = (size & 1u) ? 64u : 32u;    /* tilemap width  in tiles */
+        unsigned map_h = (size & 2u) ? 64u : 32u;    /* tilemap height in tiles */
+        unsigned sbcols = map_w >> 5;                /* screenblocks across */
+        unsigned hofs = (*(volatile unsigned short*)(gIoMem + 0x10 + bg * 4)) & 0x1FFu;
+        unsigned vofs = (*(volatile unsigned short*)(gIoMem + 0x12 + bg * 4)) & 0x1FFu;
+        int px0 = (int)(hofs & 7u), py0 = (int)(vofs & 7u);  /* sub-tile pixel offset */
+        unsigned tx0 = hofs >> 3, ty0 = vofs >> 3;           /* first visible tile */
         uint32_t span = (char_base + 0x8000u <= 0x18000u) ? 0x8000u : (0x18000u - char_base);
         for (uint32_t i = 0; i < span; i++) {
             uint8_t v = gVram[char_base + i];
@@ -190,19 +200,28 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         }
         data_cache_hit_writeback(sCharScratch, span);
         surface_t chars = surface_make(sCharScratch, FMT_CI4, 8, (int)(span * 2u / 8u), 4);
-        for (int ty = 0; ty < 20; ty++) {
-            for (int tx = 0; tx < 30; tx++) {
-                uint32_t map_addr = screen_base + (uint32_t)(ty * 32 + tx) * 2u;
+        /* 21x31 tiles: one extra row/col so the partial edge tiles from a sub-tile
+         * scroll are covered; the viewport scissor clips the overhang. */
+        for (int ty = 0; ty <= 20; ty++) {
+            for (int tx = 0; tx <= 30; tx++) {
+                unsigned mtx = (tx0 + (unsigned)tx) & (map_w - 1u);
+                unsigned mty = (ty0 + (unsigned)ty) & (map_h - 1u);
+                unsigned sb  = (mty >> 5) * sbcols + (mtx >> 5);   /* screenblock index */
+                uint32_t map_addr = screen_base + sb * 0x800u
+                                  + (((mty & 31u) * 32u + (mtx & 31u)) * 2u);
                 uint16_t entry = (uint16_t)gVram[map_addr] | ((uint16_t)gVram[map_addr + 1u] << 8u);
                 unsigned tile_idx = entry & 0x3FFu;
                 unsigned pal = (entry >> 12) & 0xFu;
+                int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
                 surface_t ts = surface_make_sub(&chars, 0, (int)tile_idx * 8, 8, 8);
                 rdpq_texparms_t parms = {0};
                 parms.palette = (int)pal;
                 parms.s.repeats = 1; parms.t.repeats = 1;
                 rdpq_tex_upload(TILE0, &ts, &parms);
-                int dx = 40 + tx * 8, dy = 40 + ty * 8;
-                rdpq_texture_rectangle(TILE0, dx, dy, dx + 8, dy + 8, 0, 0);
+                int dx = 40 + tx * 8 - px0, dy = 40 + ty * 8 - py0;
+                int s0 = hflip ? 8 : 0, s1 = hflip ? 0 : 8;
+                int t0 = vflip ? 8 : 0, t1 = vflip ? 0 : 8;
+                rdpq_texture_rectangle_scaled(TILE0, dx, dy, dx + 8, dy + 8, s0, t0, s1, t1);
             }
         }
         rspq_wait();   /* RDP done with sCharScratch before the next BG overwrites it */
@@ -211,22 +230,16 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     rdpq_detach_wait();
 }
 
-/* Does the RDP path render this frame correctly? It handles mode-0 tiled BGs with
- * zero scroll + non-affine 4bpp sprites; anything else (affine/scroll/windows/blend/
- * 8bpp or affine sprites) falls back to the correct, slower software ViruaPPU path,
- * so the port is never wrong — just not yet fast. Shrinks as RdpExtend lands. */
+/* Does the RDP path render this frame correctly? It handles mode-0 tiled BGs (with
+ * scroll, per-tile H/V flip, and the 256/512 multi-screenblock sizes) + non-affine
+ * 4bpp sprites; anything else (affine BG, windows, blend, 8bpp/affine sprites) falls
+ * back to the correct, slower software ViruaPPU path. Never wrong — shrinks as RdpExtend lands. */
 static int Port_N64_RDP_FrameSupported(void) {
     unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
     if ((dispcnt & 7u) != 0u)      return 0;   /* mode 1/2: affine BG2 */
     if (dispcnt & 0xE000u)         return 0;   /* WIN0/WIN1/OBJWIN */
     unsigned bldcnt = *(volatile unsigned short*)(gIoMem + 0x50);
     if (((bldcnt >> 6) & 3u) != 0u) return 0;  /* blend effect */
-    for (int bg = 0; bg < 4; bg++) {           /* any enabled BG with non-zero scroll */
-        if (!(dispcnt & (0x100u << bg))) continue;
-        unsigned hofs = *(volatile unsigned short*)(gIoMem + 0x10 + bg * 4);
-        unsigned vofs = *(volatile unsigned short*)(gIoMem + 0x12 + bg * 4);
-        if ((hofs & 0x1FFu) || (vofs & 0x1FFu)) return 0;
-    }
     if (dispcnt & 0x1000u) {   /* OBJ on */
         if (!g_n64_rdp_obj) return 0;   /* RDP OBJ path unverified -> software */
         /* RDP OBJ pass skips affine/8bpp — fall back if any present */
@@ -254,10 +267,11 @@ void Port_N64_VBlank(void) {
     if (b.d_down)  k &= (unsigned short)~GBA_DOWN;
     if (b.d_left)  k &= (unsigned short)~GBA_LEFT;
     if (b.d_right) k &= (unsigned short)~GBA_RIGHT;
-    if (g_n64_autoplay) {   /* bring-up: tap START at title -> file-select (has a sprite cursor) */
+    if (g_n64_autoplay) {   /* bring-up: after a few title frames, force demo-save -> TASK_GAME */
         extern Main gMain;
+        extern void Port_N64_ForceGameStart(void);
         static unsigned ap = 0;
-        if (gMain.task == 0u && ap >= 60u && (ap & 8u)) k &= (unsigned short)~GBA_START;
+        if (gMain.task == 0u && ap == 20u) Port_N64_ForceGameStart();
         ap++;
     }
     KEYINPUT = k;
@@ -305,11 +319,13 @@ void Port_N64_VBlank(void) {
      * N64 framebuffer (uncached, after the RDP/blit) so it works for both paths. */
     {
         static unsigned s_dbgf = 0;
-        if (s_dbgf < 4u || (s_dbgf & 127u) == 0u) {
+        if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
+            extern Main gMain;
             unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
-            unsigned bg0cnt  = *(volatile unsigned short*)(gIoMem + 0x08);
-            debugf("[dbg] f=%u rdp=%d DISPCNT=%04x BG0=%04x render_us=%lu\n",
-                   s_dbgf, g_n64_use_rdp, dispcnt, bg0cnt, (unsigned long)s_render_us);
+            unsigned h0 = *(volatile unsigned short*)(gIoMem + 0x10);
+            unsigned v0 = *(volatile unsigned short*)(gIoMem + 0x12);
+            debugf("[dbg] f=%u task=%u dispcnt=%04x hofs0=%04x vofs0=%04x render_us=%lu\n",
+                   s_dbgf, (unsigned)gMain.task, dispcnt, h0, v0, (unsigned long)s_render_us);
         }
         if (s_dbgf == 64u) {   /* one-shot ASCII framebuffer thumbnail (both paths) */
             static const char ramp[] = " .:-=+*#%@";
