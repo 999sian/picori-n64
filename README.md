@@ -34,7 +34,10 @@ Prerequisites:
   `b4bd50e4131b027c334547b4524e2dbbd4227130`. **Not shipped** (copyright).
 
 ```sh
-git clone --recurse-submodules https://github.com/999sian/picori-n64
+# Clone WITHOUT --recurse-submodules: the tmc fork pins some private/dead
+# nested submodules the N64 build doesn't need. build.sh inits exactly the
+# two it does need (tmc + tmc/libs/ViruaPPU).
+git clone https://github.com/999sian/picori-n64
 cd picori-n64
 cp /path/to/baserom.gba romfs/baserom.gba
 ./build.sh            # -> picori.z64   (./build.sh clean for a full rebuild)

@@ -50,9 +50,17 @@ done
 [ -x "$CC" ] || { echo "ERROR: $CC missing (set N64_INST to your libdragon toolchain)"; exit 1; }
 
 # ---- submodule + patches ----------------------------------------------------
+# NB: the tmc fork's .gitmodules pins some private/dead MatheoVignaud submodules
+# (Android/Launcher experiments) the N64 build does NOT need. Init ONLY tmc and
+# tmc/libs/ViruaPPU — never `--recursive`/`--recurse-submodules` (it dies on the
+# dead refs). Same reason README says clone WITHOUT --recurse-submodules.
 if [ ! -e "$ROOT/.git" ]; then
-  echo "[submodule] initializing tmc + nested ViruaPPU"
-  git -C "$OUTER" submodule update --init --recursive
+  echo "[submodule] init tmc"
+  git -C "$OUTER" submodule update --init tmc
+fi
+if [ ! -d "$VPPU/src" ]; then
+  echo "[submodule] init tmc/libs/ViruaPPU"
+  git -C "$ROOT" submodule update --init libs/ViruaPPU
 fi
 
 if [ "$DO_CLEAN" = 1 ]; then
