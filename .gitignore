@@ -1,0 +1,16 @@
+# build objects + outputs
+/g0/
+*.z64
+*.elf
+*.elf.stripped
+*.elf.sym
+*.map
+*.dfs
+
+# user-supplied ROM (copyright; not shipped) and any extracted assets
+romfs/*.gba
+romfs/*.bin
+
+# editor / OS
+*.swp
+.DS_Store

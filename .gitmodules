@@ -1,0 +1,3 @@
+[submodule "tmc"]
+	path = tmc
+	url = https://github.com/999sian/tmc.git

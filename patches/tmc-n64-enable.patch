@@ -1,0 +1,756 @@
+diff --git a/include/entity.h b/include/entity.h
+index 887757c9c..30e4c6b60 100644
+--- a/include/entity.h
++++ b/include/entity.h
+@@ -224,8 +224,14 @@ typedef struct Entity_ {
+     /*0x1a*/ union PACKED Palette {
+     /*    */    u8 raw;
+     /*    */    struct PACKED PaletteB {
++    /*    */        /* #N64 BE: reversed so .b0 stays the LOW nibble (raw & 0xF), as on LE. Verified via MIPS disasm. */
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    /*    */        u8 b4 : 4;
++    /*    */        u8 b0 : 4;
++#else
+     /*    */        u8 b0 : 4;
+     /*    */        u8 b4 : 4;
++#endif
+     /*    */    } b;
+     /*    */ } palette;
+     /*0x1b*/ struct PACKED SpriteOrientation {
+diff --git a/include/gba/types.h b/include/gba/types.h
+index 38540405e..c0150f453 100644
+--- a/include/gba/types.h
++++ b/include/gba/types.h
+@@ -5,11 +5,23 @@
+ 
+ typedef uint8_t u8;
+ typedef uint16_t u16;
++#ifdef TMC_N64
++/* mips64-newlib makes uint32_t 'unsigned long' — a type distinct from 'unsigned int'
++ * and from enum underlying types, which breaks function-prototype/enum compatibility
++ * the decomp relies on (it holds on x86 where uint32_t == unsigned int). Use plain
++ * 'unsigned int' on N64: still 32-bit under o64, and matches the x86 type identity. */
++typedef unsigned int u32;
++#else
+ typedef uint32_t u32;
++#endif
+ typedef uint64_t u64;
+ typedef int8_t s8;
+ typedef int16_t s16;
++#ifdef TMC_N64
++typedef int s32;
++#else
+ typedef int32_t s32;
++#endif
+ typedef int64_t s64;
+ 
+ typedef volatile u8 vu8;
+diff --git a/include/global.h b/include/global.h
+index f4a6cc2b8..cbb15d68a 100644
+--- a/include/global.h
++++ b/include/global.h
+@@ -124,7 +124,11 @@
+ typedef union {
+     s32 WORD;
+     struct {
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++        s16 y, x; /* #N64 BE: reversed so .x/.y alias the same WORD bits as little-endian */
++#else
+         s16 x, y;
++#endif
+     } HALF;
+ } Coords;
+ 
+@@ -136,17 +140,37 @@ typedef struct {
+ union SplitDWord {
+     s64 DWORD;
+     u64 DWORD_U;
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    struct {
++        s32 HI, LO;
++    } HALF;
++    struct {
++        u32 HI, LO;
++    } HALF_U;
++#else
+     struct {
+         s32 LO, HI;
+     } HALF;
+     struct {
+         u32 LO, HI;
+     } HALF_U;
++#endif
+ };
+ 
+ union SplitWord {
+     s32 WORD;
+     u32 WORD_U;
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    struct {
++        s16 HI, LO;
++    } HALF;
++    struct {
++        u16 HI, LO;
++    } HALF_U;
++    struct {
++        u8 byte3, byte2, byte1, byte0;
++    } BYTES;
++#else
+     struct {
+         s16 LO, HI;
+     } HALF;
+@@ -156,13 +180,20 @@ union SplitWord {
+     struct {
+         u8 byte0, byte1, byte2, byte3;
+     } BYTES;
++#endif
+ };
+ 
+ union SplitHWord {
+     u16 HWORD;
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    struct {
++        u8 HI, LO;
++    } PACKED HALF;
++#else
+     struct {
+         u8 LO, HI;
+     } PACKED HALF;
++#endif
+ } PACKED;
+ 
+ #if defined(_MSC_VER) && !defined(__clang__) && !defined(__GNUC__)
+diff --git a/port/port_audio.h b/port/port_audio.h
+index 3b9ab6617..066ae9b4c 100644
+--- a/port/port_audio.h
++++ b/port/port_audio.h
+@@ -3,7 +3,9 @@
+ 
+ #include <stdbool.h>
+ #include <stdint.h>
++#ifndef TMC_N64
+ #include <SDL3/SDL.h>
++#endif
+ 
+ bool Port_Audio_Init(void);
+ void Port_Audio_Shutdown(void);
+diff --git a/port/port_gameplay_stubs.c b/port/port_gameplay_stubs.c
+index 1f2ad7b9e..eae735957 100644
+--- a/port/port_gameplay_stubs.c
++++ b/port/port_gameplay_stubs.c
+@@ -22,7 +22,7 @@
+  * on Windows. The cutscene-watchdog fix doesn't depend on it — it's
+  * only used to identify the call path that deletes orchestrator
+  * entities during #93 debug. */
+-#if !defined(_WIN32) && !defined(__MINGW32__) && !defined(__MINGW64__)
++#if !defined(_WIN32) && !defined(__MINGW32__) && !defined(__MINGW64__) && !defined(TMC_N64)
+ #include <execinfo.h>
+ #define PORT_HAVE_EXECINFO 1
+ #else
+diff --git a/port/port_gba_mem.h b/port/port_gba_mem.h
+index fb8ee35bb..b00f5b1ae 100644
+--- a/port/port_gba_mem.h
++++ b/port/port_gba_mem.h
+@@ -56,10 +56,26 @@ static inline void* gba_TryMemPtr(uint32_t addr) {
+     return NULL;
+ }
+ 
++#ifdef TMC_N64
++extern volatile uint32_t g_n64_last_bad_addr;
++extern volatile uint32_t g_n64_bad_count;
++#endif
++
+ static inline void* gba_MemPtr(uint32_t addr) {
+     void* ptr = gba_TryMemPtr(addr);
+     if (ptr)
+         return ptr;
++#ifdef TMC_N64
++    /* #N64: never abort on a stray GBA address (libdragon abort() draws the
++     * CPU-exception inspector and halts). Record it (surfaced on-screen by
++     * Port_N64_VBlank) and return a shared scratch page so the engine limps. */
++    {
++        static u8 sN64Scratch[0x10000];
++        g_n64_last_bad_addr = addr;
++        g_n64_bad_count++;
++        return sN64Scratch;
++    }
++#else
+ #if defined(__GNUC__)
+     void* caller = __builtin_return_address(0);
+     fprintf(stderr, "FATAL: gba_MemPtr: invalid address 0x%08X (called from %p)\n", addr, caller);
+@@ -77,6 +93,7 @@ static inline void* gba_MemPtr(uint32_t addr) {
+ #endif
+     abort();
+     return NULL;
++#endif
+ }
+ 
+ /*
+diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
+index 130c55dad..1c42e0a5e 100644
+--- a/port/port_linked_stubs.c
++++ b/port/port_linked_stubs.c
+@@ -157,7 +159,14 @@ u32 gFrameObjLists[50016];
+ // On GBA this is a label in .rodata at gAreaRoomMap_None (~14MB region).
+ // On PC, we use a large buffer filled from ROM in Port_LoadRom().
+ // Source files use &gMapData + offset, so this must be an array (not a pointer).
++#ifdef TMC_N64
++/* #N64: the ~14 MB ROM map-data window can't live in 8 MB RDRAM. Temporary 1 MB
++ * placeholder so the binary links and boots to the title (which doesn't read map
++ * data). Phase 3 backs &gMapData with the embedded cart ROM (PI/DFS), not a RAM copy. */
++u8 gMapData[0x100000] __attribute__((aligned(4))); /* 1 MB placeholder */
++#else
+ u8 gMapData[0xE00000] __attribute__((aligned(4))); /* ~14 MB */
++#endif
+ 
+ // gCollisionMtx — On GBA, the collision matrix label sits at 0x080B7B74 with
+ // only 1210 bytes of named data, but collision.c declares it as
+diff --git a/port/port_rom.c b/port/port_rom.c
+index e22c0803c..18882bbef 100644
+--- a/port/port_rom.c
++++ b/port/port_rom.c
+@@ -15,7 +15,9 @@
+ #include "port_gba_mem.h"
+ #include "structures.h"
+ #include "tileMap.h"
++#ifndef TMC_N64
+ #include <SDL3/SDL.h>
++#endif
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -30,7 +32,7 @@
+ #include <mach-o/dyld.h>
+ #include <stdlib.h>      /* realpath */
+ #include <sys/stat.h>
+-#else
++#elif !defined(TMC_N64)
+ #include <dirent.h>
+ #include <sys/stat.h>
+ /* Forward-declare readlink to avoid pulling in _POSIX_C_SOURCE feature test
+@@ -38,6 +40,20 @@
+ extern long readlink(const char* path, char* buf, unsigned long bufsiz);
+ #endif
+ 
++#ifdef TMC_N64
++/* N64/newlib lacks <dirent.h> and several POSIX FS calls. The host ROM
++ * file-finding functions that use them are never called on N64 (Port_LoadRom
++ * skips file I/O) and are dropped by --gc-sections, but must still COMPILE,
++ * so provide just enough declarations. */
++typedef struct __n64_DIR DIR;
++struct dirent { char d_name[256]; };
++DIR* opendir(const char*);
++struct dirent* readdir(DIR*);
++int closedir(DIR*);
++int mkdir(const char*, unsigned);
++extern long readlink(const char*, char*, unsigned long);
++#endif
++
+ u8* gRomData = NULL;
+ u32 gRomSize = 0;
+ static SpritePtr sSpritePtrsStable[512];
+@@ -76,8 +92,12 @@ static FILE* TryOpenRom(const char** paths, int count, char* foundPath, int foun
+ static void FatalRomError(const char* title, const char* message) {
+     fprintf(stderr, "ERROR: %s\n", message);
+     fflush(stderr);
++#ifndef TMC_N64
+     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message, NULL);
+     SDL_Quit();
++#else
++    (void)title;
++#endif
+     exit(1);
+ }
+ 
+@@ -498,12 +518,26 @@ bool32 Port_IsAreaTablePtrReadable(u32 area, const void* ptr) {
+ /* Forward declaration */
+ static inline void* ResolveRomPtr(u32 gba_addr);
+ 
++/* Read a GBA little-endian u16/u32 from a ROM byte pointer, host-endian-safe.
++ * GBA ROM data is little-endian; a native u16/u32 load byte-swaps it on a
++ * big-endian host (N64). Reading byte-by-byte in LE order is correct on both
++ * little-endian PC and big-endian N64. */
++static inline u32 RomLE32(const void* p) {
++    /* Use a 32-bit load: N64 CPU byte reads (lbu) from the cart are corrupted
++     * (odd 16-bit halfwords dropped), but 32-bit loads (lw) work. The lw returns
++     * the GBA little-endian bytes in big-endian order on N64, so byte-swap. */
++    u32 v = *(const u32*)p;
++#ifdef TMC_N64
++    v = __builtin_bswap32(v);
++#endif
++    return v;
++}
++
+ /* Resolve a ROM sub-table of 32-bit GBA pointers into a native pointer array. */
+ static void ResolveSubTable(void* romBase, void** dest, u32 count) {
+     u8* base = (u8*)romBase;
+     for (u32 j = 0; j < count; j++) {
+-        u32 ptr;
+-        memcpy(&ptr, base + j * 4, 4);
++        u32 ptr = RomLE32(base + j * 4);
+         dest[j] = ResolveRomPtr(ptr);
+     }
+ }
+@@ -517,8 +551,7 @@ static u32 ScanSubArrayCount(const void* base) {
+     }
+ 
+     for (u32 i = 0; i < MAX_ROOMS; i++) {
+-        u32 value;
+-        memcpy(&value, bytes + i * 4, 4);
++        u32 value = RomLE32(bytes + i * 4);
+         if (value == 0 || (value >= 0x08000000u && value < 0x08000000u + gRomSize)) {
+             count = i + 1;
+         } else {
+@@ -636,8 +669,7 @@ void* Port_ReadPackedRomPtr(const void* base, u32 index) {
+     /* For PC `.rodata` stubs we have no size info — trust the caller. */
+ 
+     const u8* readPtr = (const u8*)base + index * 4;
+-    u32 raw;
+-    memcpy(&raw, readPtr, 4);
++    u32 raw = RomLE32(readPtr);
+     if (raw == 0)
+         return NULL;
+     raw &= ~1u;
+@@ -933,6 +965,7 @@ static int LoadRomGaps(void) {
+ }
+ 
+ void Port_LoadRom(const char* path) {
++#ifndef TMC_N64
+     memset(sExtractedPages, 0, sizeof(sExtractedPages));
+ 
+     /* ---- Step 1: try loading from rom_data/ extracted pages ---- */
+@@ -1029,6 +1062,14 @@ void Port_LoadRom(const char* path) {
+             "No ROM data available after loading.\n\n"
+             "The ROM file may be empty or unreadable.");
+     }
++#else
++    /* #N64: gRomData/gRomSize already point at the embedded cart ROM (set by
++     * n64_main before calling Port_LoadRom). Skip all host file I/O. */
++    (void)path;
++    if (!gRomData || gRomSize == 0) {
++        return;
++    }
++#endif
+ 
+     /* ---- Step 3: auto-detect ROM region ---- */
+     Port_DetectRomRegion(gRomData, gRomSize);
+@@ -1037,11 +1078,36 @@ void Port_LoadRom(const char* path) {
+     fprintf(stderr, "Using offsets for %s (game code: %.4s)\n", gRomRegion == ROM_REGION_EU ? "EU" : "USA",
+             R->gameCode);
+ 
++#ifdef TMC_N64
++    {   /* Byte-order / alignment probe: compare against known GBA header bytes.
++         * Logo@0x04 is the fixed sequence 24 FF AE 51 69 9A A2 21; gamecode@0xAC
++         * is 'BZME' = 42 5A 4D 45. Mismatch => cart CPU byte reads are swapped or
++         * gRomData is misaligned. */
++        const u8* h = gRomData;
++        fprintf(stderr, "[romdump] hdr[0..7]=%02x %02x %02x %02x %02x %02x %02x %02x  logo[4..11]=%02x %02x %02x %02x %02x %02x %02x %02x (expect 24 FF AE 51 69 9A A2 21)\n",
++                h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7], h[4],h[5],h[6],h[7],h[8],h[9],h[10],h[11]);
++        fprintf(stderr, "[romdump] gamecode[AC..AF]=%02x %02x %02x %02x (expect 42 5A 4D 45 'BZME')\n",
++                h[0xAC],h[0xAD],h[0xAE],h[0xAF]);
++        const u8* g = &gRomData[R->gfxGroups];
++        fprintf(stderr, "[romdump] gfxGroups@0x%X [0..11]=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
++                R->gfxGroups, g[0],g[1],g[2],g[3],g[4],g[5],g[6],g[7],g[8],g[9],g[10],g[11]);
++    }
++#endif
++
+     /* ---- Step 4: resolve ROM symbols using compile-time tables + gRomData ---- */
+ 
+     /* gGlobalGfxAndPalettes — huge palette/gfx blob (still points into gRomData) */
+     gGlobalGfxAndPalettes = &gRomData[R->gfxAndPalettes];
+ 
++    /* gGfxGroups / gPaletteGroups — resolve the ROM pointer tables (arrays of
++     * GBA pointers to GfxItem / PaletteGroup descriptors). On PC these come from
++     * the asset pipeline; on N64 (assets stubbed) they MUST be resolved from the
++     * ROM here, else LoadGfxGroup/LoadPaletteGroup see NULL and skip every load. */
++    ResolveSubTable(&gRomData[R->gfxGroups], (void**)gGfxGroups, R->gfxGroupsCount);
++    ResolveSubTable(&gRomData[R->paletteGroups], (void**)gPaletteGroups, R->paletteGroupsCount);
++    fprintf(stderr, "gGfxGroups/gPaletteGroups resolved (%u gfx, %u palette) from ROM.\n",
++            R->gfxGroupsCount, R->paletteGroupsCount);
++
+     /* gPalette_549 — Mt Crenel weather-change reads a 26-palette contiguous
+      * block starting here. Copy it out of gGlobalGfxAndPalettes (offset 0x44A0
+      * — same relative position on USA and EU because the palette ordering in
+@@ -1257,6 +1323,10 @@ void Port_LoadRom(const char* path) {
+         u32 mapDataSize = gRomSize - R->mapDataBase;
+         if (mapDataSize > 0xE00000u)
+             mapDataSize = 0xE00000u;
++#ifdef TMC_N64
++        if (mapDataSize > 0x100000u)
++            mapDataSize = 0x100000u; /* gMapData is a 1 MB placeholder on N64 */
++#endif
+         memcpy(gMapData, &gRomData[R->mapDataBase], mapDataSize);
+         fprintf(stderr, "gMapData loaded (%u bytes from ROM offset 0x%X).\n", mapDataSize, R->mapDataBase);
+     }
+diff --git a/port/port_runtime_config.h b/port/port_runtime_config.h
+index 9eea449f1..4d8d162fc 100644
+--- a/port/port_runtime_config.h
++++ b/port/port_runtime_config.h
+@@ -1,7 +1,9 @@
+ #pragma once
+ 
+ #include "port_types.h"
++#ifndef TMC_N64
+ #include <SDL3/SDL.h>
++#endif
+ #include <stdbool.h>
+ #include <stddef.h>
+ 
+@@ -131,7 +141,9 @@ const char* Port_Config_GetTtsLanguage(void);
+ void        Port_Config_SetTtsLanguage(const char* v);
+ 
+ void Port_Config_OpenGamepads(void);
++#ifndef TMC_N64
+ void Port_Config_HandleEvent(const SDL_Event* e);
++#endif
+ bool Port_Config_InputPressed(PortInput input);
+ void Port_Config_CloseGamepads(void);
+ 
+diff --git a/port/port_types.h b/port/port_types.h
+index ba38afbd3..328632ca7 100644
+--- a/port/port_types.h
++++ b/port/port_types.h
+@@ -12,12 +12,20 @@
+ // Type definitions for GBA-style fixed-width types
+ typedef uint8_t u8;
+ typedef uint16_t u16;
++#ifdef TMC_N64
++typedef unsigned int u32; /* match gba/types.h: mips-newlib uint32_t is 'unsigned long' */
++#else
+ typedef uint32_t u32;
++#endif
+ typedef uint64_t u64;
+ 
+ typedef int8_t s8;
+ typedef int16_t s16;
++#ifdef TMC_N64
++typedef int s32;
++#else
+ typedef int32_t s32;
++#endif
+ typedef int64_t s64;
+ 
+ typedef volatile u8 vu8;
+diff --git a/src/common.c b/src/common.c
+index b713145e6..d05e4137e 100644
+--- a/src/common.c
++++ b/src/common.c
+@@ -70,6 +70,17 @@ typedef struct {
+     u32 unk8;
+ } GfxItem;
+ 
++#ifdef TMC_N64
++/* GBA ROM structs are little-endian; on the big-endian N64 a native multi-byte
++ * read byte-swaps them. Convert ROM-sourced u16/u32 struct fields to host order.
++ * (u8 fields are byte reads and need no conversion.) */
++#define ROM_U16(x) ((u16)__builtin_bswap16((u16)(x)))
++#define ROM_U32(x) ((u32)__builtin_bswap32((u32)(x)))
++#else
++#define ROM_U16(x) (x)
++#define ROM_U32(x) (x)
++#endif
++
+ typedef struct {
+     u8 filler[0xA00];
+ } struct_02017AA0;
+@@ -122,6 +133,14 @@ typedef struct {
+ #define COMMON_AREA_TABLE_COUNT 0x90
+ 
+ static void Common_AbortMissingAssetGroup(const char* kind, u32 group) {
++#ifdef TMC_N64
++    /* #N64: graphics/palettes come from the embedded ROM via the GBA-original
++     * path *below* the PC `assets/` block, not from a PC asset tree. Returning
++     * here lets the caller (LoadGfxGroup / LoadPaletteGroup) fall through to
++     * that ROM path instead of aborting. */
++    (void)kind; (void)group;
++    return;
++#endif
+     fprintf(stderr, "\n[FATAL] %s group %u not found.\n", kind, group);
+     fprintf(stderr, "\n  The PC port reads tile graphics, palettes and music\n");
+     fprintf(stderr, "  from an `assets/` tree that you produce once by running\n");
+@@ -384,14 +403,30 @@ void LoadPaletteGroup(u32 group) {
+     Common_AbortMissingAssetGroup("palette", group);
+ #endif
+     const PaletteGroup* paletteGroup = gPaletteGroups[group];
++#ifdef PC_PORT
++    /* #port bug-class-2: a ROM palette group can be unresolved (NULL) on the
++     * native port; the GBA always had a valid ROM pointer here. Skip rather than
++     * NULL-deref (crashes on N64; harmless garbage read on GBA). */
++    if (paletteGroup == NULL) {
++        static u8 sSeenNullPg[256] = {0};
++        if (group < 256 && !sSeenNullPg[group]) {
++            sSeenNullPg[group] = 1;
++            fprintf(stderr, "[port] LoadPaletteGroup: group %u unresolved (NULL) — skipping\n", group);
++        }
++        return;
++    }
++#endif
+     while (1) {
+-        u32 destPaletteNum = paletteGroup->destPaletteNum;
+-        u32 numPalettes = paletteGroup->numPalettes & 0xF;
++        /* Read the 4-byte PaletteGroup via a 32-bit load (N64 cart lbu/lhu are
++         * broken); ROM_U32 byte-swaps on the BE host. */
++        u32 pg = ROM_U32(*(const u32*)paletteGroup);
++        u32 destPaletteNum = (pg >> 16) & 0xFF;
++        u32 numPalettes = (pg >> 24) & 0xF;
+         if (numPalettes == 0) {
+             numPalettes = 16;
+         }
+-        LoadPalettes(&gGlobalGfxAndPalettes[paletteGroup->paletteId * 32], destPaletteNum, numPalettes);
+-        if ((paletteGroup->numPalettes & 0x80) == 0) {
++        LoadPalettes(&gGlobalGfxAndPalettes[(pg & 0xFFFF) * 32], destPaletteNum, numPalettes);
++        if (((pg >> 24) & 0x80) == 0) {
+             break;
+         }
+         paletteGroup++;
+@@ -408,6 +443,12 @@ void LoadPalettes(const u8* src, s32 destPaletteNum, s32 numPalettes) {
+     gUsedPalettes |= usedPalettesMask;
+     dest = &gPaletteBuffer[destPaletteNum * 16];
+     DmaCopy32(3, src, dest, size);
++#ifdef TMC_N64
++    /* DmaCopy32 byte-preserves the GBA little-endian colors; a native u16 read
++     * on the big-endian N64 would byte-swap each BGR555 color. Swap in place so
++     * the engine and ViruaPPU see correct colors. */
++    for (u32 i = 0; i < size / 2u; i++) dest[i] = (u16)__builtin_bswap16(dest[i]);
++#endif
+ }
+ 
+ void SetColor(u32 colorIndex, u32 color) {
+@@ -438,10 +479,23 @@ void LoadGfxGroup(u32 group) {
+     u32 dest;
+     int size;
+     const GfxItem* gfxItem = gGfxGroups[group];
++#ifdef PC_PORT
++    /* #port bug-class-2: ROM gfx group can be unresolved (NULL) on the native
++     * port; skip rather than NULL-deref (crashes on N64). */
++    if (gfxItem == NULL) {
++        static u8 sSeenNullGfx[256] = {0};
++        if (group < 256 && !sSeenNullGfx[group]) {
++            sSeenNullGfx[group] = 1;
++            fprintf(stderr, "[port] LoadGfxGroup: group %u unresolved (NULL) — skipping\n", group);
++        }
++        return;
++    }
++#endif
+     while (1) {
+         u32 loadGfx = FALSE;
+-        u32 ctrl = gfxItem->unk0.bytes.unk3;
+-        ctrl &= 0xF;
++        /* Read unk0 via a 32-bit load (N64 cart byte reads are broken). */
++        u32 gi = ROM_U32(gfxItem->unk0.raw);
++        u32 ctrl = (gi >> 24) & 0xF;
+         switch (ctrl) {
+             case 0x7:
+                 loadGfx = TRUE;
+@@ -466,10 +520,10 @@ void LoadGfxGroup(u32 group) {
+         }
+ 
+         if (loadGfx) {
+-            gfxOffset = gfxItem->unk0.raw & 0xFFFFFF;
++            gfxOffset = gi & 0xFFFFFF;
+             src = &gGlobalGfxAndPalettes[gfxOffset];
+-            dest = gfxItem->dest;
+-            size = gfxItem->unk8;
++            dest = ROM_U32(gfxItem->dest);
++            size = (int)ROM_U32(gfxItem->unk8);
+             dmaCtrl = 0x80000000;
+             if (size < 0) {
+                 if (dest >= VRAM) {
+@@ -482,8 +536,7 @@ void LoadGfxGroup(u32 group) {
+             }
+         }
+ 
+-        terminator = gfxItem->unk0.bytes.unk3;
+-        terminator &= 0x80;
++        terminator = (gi >> 24) & 0x80;
+         gfxItem++;
+         if (!terminator) {
+             break;
+diff --git a/src/enemy/vaatiTransfiguredEye.c b/src/enemy/vaatiTransfiguredEye.c
+index a0190dd6d..8056c7f59 100644
+--- a/src/enemy/vaatiTransfiguredEye.c
++++ b/src/enemy/vaatiTransfiguredEye.c
+@@ -13,7 +13,17 @@
+ 
+ typedef struct {
+     /*0x00*/ Entity base;
++#if defined(PC_PORT) && (__SIZEOF_POINTER__ == 8)
++    /* #151: this struct is also used to cast the Vaati Transfigured body in
++     * VaatiTransfiguredEye_OnCollision. Match VaatiTransfiguredEntity's
++     * #98 Enemy::child padding so hits set the body's real unk_76 mask; without
++     * this, Phase 2 eyes write four bytes low and Vaati never becomes vulnerable.
++     * Gated to 8-byte pointers: on MIPS32 (N64) the Entity base stays 0x68 and
++     * Enemy::child is 4 bytes, so the +4 must drop or unk_76 lands at 0x7A. */
++    /*0x68*/ u8 unused1[13 + 4];
++#else
+     /*0x68*/ u8 unused1[13];
++#endif
+     /*0x75*/ u8 unk_75;
+     /*0x76*/ u8 unk_76;
+     /*0x77*/ u8 unused2[9];
+@@ -24,6 +34,10 @@ typedef struct {
+     /*0x84*/ u8 unused3[1];
+     /*0x85*/ u8 unk_85;
+ } VaatiTransfiguredEyeEntity;
++PORT_STATIC_ASSERT_OFFSET(VaatiTransfiguredEyeEntity, unk_76, 0x76, 0xA2,
++                          "VaatiTransfiguredEyeEntity unk_76 offset incorrect");
++PORT_STATIC_ASSERT_OFFSET(VaatiTransfiguredEyeEntity, unk_81, 0x81, 0xAD,
++                          "VaatiTransfiguredEyeEntity unk_81 offset incorrect");
+ 
+ void sub_08045A00(VaatiTransfiguredEyeEntity*);
+ void sub_08045A28(VaatiTransfiguredEyeEntity*);
+diff --git a/src/fade.c b/src/fade.c
+index b67ca34c0..ad83a45df 100644
+--- a/src/fade.c
++++ b/src/fade.c
+@@ -42,6 +42,17 @@ static const u32 sFadeTableOffsets[NUM_FADE_BRIGHTNESS][3] = {
+     { 0x1104, 0x1144, 0x1184 }, /* brightness 2 */
+ };
+ 
++#ifdef TMC_N64
++/* 16-bit cart reads (lhu) are broken on N64's strict PI bus; read the containing
++ * 32-bit-aligned word (lw is fine) and extract the halfword (big-endian: the
++ * lower address is the high half). Returns the same value the GBA's lhu would. */
++static inline u16 n64_cart_u16(const void* p) {
++    uintptr_t a = (uintptr_t)p;
++    u32 w = *(const volatile u32*)(void*)(a & ~(uintptr_t)3);
++    return (a & 2u) ? (u16)(w & 0xFFFFu) : (u16)(w >> 16);
++}
++#endif
++
+ static void Port_MakeFadeBuff256(u8* src, u8* dest, u16 intensity, u8 color) {
+     u32 bias = (u32)intensity * (u32)color;
+     u32 factor = 0x400 - (u32)intensity * 4;
+@@ -64,6 +75,25 @@ static void Port_MakeFadeBuff256(u8* src, u8* dest, u16 intensity, u8 color) {
+     if (!dstPtr)
+         return; // Safety check
+ 
++#ifdef TMC_N64
++    /* The fade tables live in the cart; the tableR[r>>1] loads below are 16-bit
++     * cart reads (lhu) that return garbage on N64's strict PI bus -> wrong faded
++     * colors every frame (the ares "wrong colours" bug). Cache the 3 tables
++     * (32 u16 each) in RAM via 32-bit-safe reads, re-copied only when brightness
++     * (hence the table set) changes, then index the RAM copies. */
++    static u16 sCacheR[32], sCacheG[32], sCacheB[32];
++    static int sCacheBrightness = -1;
++    if ((int)brightness != sCacheBrightness) {
++        for (int k = 0; k < 32; k++) {
++            sCacheR[k] = n64_cart_u16(&tableR[k]);
++            sCacheG[k] = n64_cart_u16(&tableG[k]);
++            sCacheB[k] = n64_cart_u16(&tableB[k]);
++        }
++        sCacheBrightness = (int)brightness;
++    }
++    tableR = sCacheR; tableG = sCacheG; tableB = sCacheB;
++#endif
++
+     for (int i = 0; i < 16; i++) {
+         u16 col = srcPtr[i];
+         u32 shifted = (u32)col << 1;
+diff --git a/src/main.c b/src/main.c
+index 17446178e..7e5ada1ad 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -15,9 +15,20 @@
+ #include "fade.h"
+ #ifdef PC_PORT
+ #include "port_hdma.h"
++#include <setjmp.h>
+ #endif
+ #include "gba/io_reg.h"
+ 
++#ifdef TMC_N64
++/* N64 bring-up: paint a boot-phase marker (port/n64/n64_main.c) so a hang in
++ * init — before the engine's first VBlankIntrWait can render — is localizable.
++ * Compiles to nothing off N64. Diagnostic scaffolding. */
++extern void n64_post(int);
++#define N64_POST(n) n64_post(n)
++#else
++#define N64_POST(n)
++#endif
++
+ extern u32 gRand;
+ 
+ static void InitOverlays(void);
+@@ -38,22 +49,45 @@ void (*const sTaskHandlers[])(void) = {
+ };
+ 
+ void AgbMain(void) {
++#ifdef PC_PORT
++    /* Soft-reset re-entry point. SoftReset() (port_bios.c) longjmp()s here so
++     * the credits end, the reset combo, and game-over restart to the title by
++     * re-running the init below — RegisterRamReset preserves EWRAM (save data),
++     * everything else is reset. Native equivalent of the GBA BIOS soft reset;
++     * see DoSoftReset() / SoftReset(). */
++    {
++        extern jmp_buf gPortSoftResetJmp;
++        extern int gPortSoftResetArmed;
++        setjmp(gPortSoftResetJmp);
++        gPortSoftResetArmed = 1;
++    }
++#endif
+     // Initialization
++    N64_POST(10);
+     InitOverlays();
++    N64_POST(11);
+     InitSound();
++    N64_POST(12);
+     InitDMA();
++    N64_POST(13);
+     InitSaveData();
++    N64_POST(14);
+     InitSaveHeader();
++    N64_POST(15);
+     InitVBlankDMA();
++    N64_POST(16);
+     gUnk_02000010.field_0x4 = 0xc1;
+     InitFade();
+     DmaCopy32(3, BG_PLTT, gPaletteBuffer, BG_PLTT_SIZE);
+     SetBrightness(1);
++    N64_POST(17);
+     MessageInitialize();
+     ResetPalettes();
++    N64_POST(18);
+     gRand = 0x1234567;
+     MemClear(&gMain, sizeof(gMain));
+     SetTask(TASK_TITLE);
++    N64_POST(20);
+ 
+     // Game Loop
+     while (TRUE) {
+@@ -84,6 +118,9 @@ void AgbMain(void) {
+ 
+                 gMain.ticks++;
+                 sTaskHandlers[gMain.task]();
++#ifdef TMC_N64
++        { static int s_once = 0; if (!s_once) { s_once = 1; n64_post(22); } }
++#endif
+ 
+                 MessageMain();
+ 
+diff --git a/src/object/pushableGrave.c b/src/object/pushableGrave.c
+index f34ad5334..209e0c5a9 100644
+--- a/src/object/pushableGrave.c
++++ b/src/object/pushableGrave.c
+@@ -28,7 +28,7 @@ typedef struct {
+     /*0x78*/ u16 unk_78;
+     /*0x7a*/ u16 unk_7a;
+     /*0x7c*/ s8 unk_7c[0xa];
+-#ifdef PC_PORT
++#if defined(PC_PORT) && __SIZEOF_POINTER__ == 8 /* 64-bit-ptr ports only; 32-bit ports (N64/MIPS) keep GBA 0x68 */
+     /* #130-class softlock. pushedFlag sits at GBA 0x86 = GenericEntity.field_0x86.
+      * Room-placed graves get their flag from spritePtr through RegisterRoomEntity,
+      * which on PC writes it to BOTH the aligned field_0x86 (0xB2) and the raw
+diff --git a/src/object/sanctuaryStoneTablet.c b/src/object/sanctuaryStoneTablet.c
+index a371f267e..cac6a8909 100644
+--- a/src/object/sanctuaryStoneTablet.c
++++ b/src/object/sanctuaryStoneTablet.c
+@@ -12,7 +12,7 @@
+ typedef struct {
+     Entity base;
+     u8 filler[0x1E];
+-#ifdef PC_PORT
++#if defined(PC_PORT) && __SIZEOF_POINTER__ == 8 /* 64-bit-ptr ports only; 32-bit ports (N64/MIPS) keep GBA 0x68 */
+     /* #130 Four Sword Sanctuary softlock. On GBA `objFlags` sits at 0x86, which
+      * is exactly GenericEntity.field_0x86 — the word sub_0807F8E8 writes the
+      * activation flag (0x8004) into when the script spawns this plaque. The
