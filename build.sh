@@ -162,8 +162,27 @@ mkdir -p "$OUTER/romfs"
   exit 1
 }
 echo "[dfs] baserom.dfs"
-if [ ! -f "$OUTER/baserom.dfs" ] || [ "$OUTER/romfs/baserom.gba" -nt "$OUTER/baserom.dfs" ]; then
+# The DFS on-disk format is versioned by the installed libdragon (the
+# "DragonFS 2.x" magic that the engine's dfs_init validates at boot). The plain
+# staleness check only compares against baserom.gba, so swapping libdragon
+# versions (e.g. trunk<->preview == DragonFS 2.0<->2.1) leaves a stale
+# baserom.dfs that the new dfs_init rejects -> ROM not found -> boot hangs at
+# POST P2. Guard it: stamp the DFS with the libdragon identity it was built
+# against (libdragon.version content, plus the mkdfs tool's mtime) and
+# regenerate whenever either changes.
+LIBVER_FILE="$N64_INST/mips64-elf/include/libdragon.version"
+DFS_STAMP="$OUTER/baserom.dfs.libdragon"
+LIBVER_NOW="$(cat "$LIBVER_FILE" 2>/dev/null || echo 'no-libdragon.version')"
+dfs_reason=""
+if   [ ! -f "$OUTER/baserom.dfs" ];                                   then dfs_reason="missing"
+elif [ "$OUTER/romfs/baserom.gba" -nt "$OUTER/baserom.dfs" ];        then dfs_reason="baserom.gba changed"
+elif [ "$N64_INST/bin/mkdfs" -nt "$OUTER/baserom.dfs" ];             then dfs_reason="mkdfs rebuilt"
+elif [ "$LIBVER_NOW" != "$(cat "$DFS_STAMP" 2>/dev/null || true)" ]; then dfs_reason="libdragon.version changed"
+fi
+if [ -n "$dfs_reason" ]; then
+  echo "  regenerating ($dfs_reason)"
   "$N64_INST/bin/mkdfs" "$OUTER/baserom.dfs" "$OUTER/romfs" >/dev/null
+  printf '%s\n' "$LIBVER_NOW" > "$DFS_STAMP"
 fi
 
 echo "[z64] picori.z64"

@@ -95,7 +95,7 @@ static uint16_t sObjPlttBE[256];
  * compare). GBA 4bpp packs the left pixel in the LOW nibble but RDP CI4 wants it
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
-int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
+int g_n64_use_rdp = 1;    /* RDP render path (chunked TMEM upload); software is the fallback */
 int g_n64_autoplay = 0;   /* bring-up: ON = demo-save room (Link rendered, interactivity WIP); default = title */
 int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
                            * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
@@ -190,6 +190,34 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         unsigned vofs = (*(volatile unsigned short*)(gIoMem + 0x12 + bg * 4)) & 0x1FFu;
         int px0 = (int)(hofs & 7u), py0 = (int)(vofs & 7u);  /* sub-tile pixel offset */
         unsigned tx0 = hofs >> 3, ty0 = vofs >> 3;           /* first visible tile */
+        if ((dispcnt & 7u) == 1u && bg == 2) {
+            /* mode-1 affine BG2 (e.g. the title forest): 8-bit map + CI8 tiles, positioned
+             * by BG2X/Y. The title's affine matrix is ~identity, so render it as a tiled BG
+             * at that pixel offset (rotation/scale not yet applied). */
+            unsigned asz = (bgcnt >> 14) & 3u;               /* 0:16 1:32 2:64 3:128 tiles/side */
+            unsigned atiles = 16u << asz;
+            int bx = (int)(*(volatile uint32_t*)(gIoMem + 0x28)) >> 8;  /* BG2X .8 fixed -> px */
+            int by = (int)(*(volatile uint32_t*)(gIoMem + 0x2C)) >> 8;
+            uint32_t cspan = (char_base + 0x4000u <= 0x18000u) ? 0x4000u : (0x18000u - char_base);
+            for (uint32_t i = 0; i < cspan; i++) sCharScratch[i] = gVram[char_base + i]; /* CI8: no nibble swap */
+            data_cache_hit_writeback(sCharScratch, cspan);
+            surface_t chars8 = surface_make(sCharScratch, FMT_CI8, 8, (int)(cspan / 8u), 8);
+            int px0a = ((bx & 7) + 8) & 7, py0a = ((by & 7) + 8) & 7;
+            int tx0a = bx >> 3, ty0a = by >> 3;
+            for (int ty = 0; ty <= 20; ty++) {
+                for (int tx = 0; tx <= 30; tx++) {
+                    unsigned mtx = (unsigned)(tx0a + tx) & (atiles - 1u);
+                    unsigned mty = (unsigned)(ty0a + ty) & (atiles - 1u);
+                    unsigned tile = gVram[screen_base + mty * atiles + mtx]; /* 8-bit affine map */
+                    surface_t ts = surface_make_sub(&chars8, 0, (int)(tile * 8u), 8, 8);
+                    rdpq_tex_upload(TILE0, &ts, NULL);
+                    int dx = 40 + tx * 8 - px0a, dy = 40 + ty * 8 - py0a;
+                    rdpq_texture_rectangle_scaled(TILE0, dx, dy, dx + 8, dy + 8, 0, 0, 8, 8);
+                }
+            }
+            rspq_wait();
+            continue;
+        }
         uint32_t span = (char_base + 0x8000u <= 0x18000u) ? 0x8000u : (0x18000u - char_base);
         for (uint32_t i = 0; i < span; i++) {
             uint8_t v = gVram[char_base + i];
@@ -228,25 +256,15 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
 }
 
 /* Does the RDP path render this frame correctly? It handles mode-0 tiled BGs (with
- * scroll, per-tile H/V flip, and the 256/512 multi-screenblock sizes) + non-affine
- * 4bpp sprites; anything else (affine BG, windows, blend, 8bpp/affine sprites) falls
- * back to the correct, slower software ViruaPPU path. Never wrong — shrinks as RdpExtend lands. */
+ * scroll, per-tile H/V flip, multi-screenblock sizes) + mode-1 (text BG0/1 + affine BG2,
+ * e.g. the title) + non-affine 4bpp OBJ. Affine/8bpp OBJ and blend are NOT RDP-handled,
+ * but no longer drop the whole frame to software: the BGs render on RDP and RenderOBJ
+ * skips the sprites it can't do (blend ignored -> opaque). Only mode 2+ and hardware
+ * windows still fall back to the software ViruaPPU path. */
 static int Port_N64_RDP_FrameSupported(void) {
     unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
-    if ((dispcnt & 7u) != 0u)      return 0;   /* mode 1/2: affine BG2 */
-    if (dispcnt & 0xE000u)         return 0;   /* WIN0/WIN1/OBJWIN */
-    unsigned bldcnt = *(volatile unsigned short*)(gIoMem + 0x50);
-    if (((bldcnt >> 6) & 3u) != 0u) return 0;  /* blend effect */
-    if (dispcnt & 0x1000u) {   /* OBJ on */
-        if (!g_n64_rdp_obj) return 0;   /* RDP OBJ path unverified -> software */
-        /* RDP OBJ pass skips affine/8bpp — fall back if any present */
-        for (int i = 0; i < 128; i++) {
-            uint16_t a0 = gOamMem[i * 4 + 0];
-            int affine = (a0 >> 8) & 1;
-            if (!affine && ((a0 >> 9) & 1)) continue;        /* hidden */
-            if (affine || ((a0 >> 13) & 1)) return 0;        /* affine or 8bpp sprite */
-        }
-    }
+    if ((dispcnt & 7u) > 1u)  return 0;   /* mode 2+: not handled */
+    if (dispcnt & 0xE000u)    return 0;   /* WIN0/WIN1/OBJWIN: not handled */
     return 1;
 }
 
@@ -397,6 +415,16 @@ void n64_post(int phase) {
 
 int main(void) {
     debug_init_isviewer();
+    /* The GBA had no FPU, so the decompiled float math (e.g. HandleTitlescreen does
+     * 0.0/0.0 -> NaN) never trapped. The VR4300 FPU traps invalid/div0 by default and
+     * crashes (div.s $f0,$f0,$f0). Clear the FCR31 enable bits so those produce NaN/Inf
+     * silently, matching GBA behaviour. */
+    {
+        uint32_t fcr31;
+        asm volatile("cfc1 %0, $31" : "=r"(fcr31));
+        fcr31 &= ~(0x1Fu << 7);   /* disable V/Z/O/U/I exception traps */
+        asm volatile("ctc1 %0, $31" :: "r"(fcr31));
+    }
     debugf("[n64] Project Picori — N64 boot\n");
     /* ares with no Expansion Pak = 4 MB; this image (~5.4 MB) needs 8 MB. Print
      * the detected size so a 4 MB config (the likely "works on gopher64, not

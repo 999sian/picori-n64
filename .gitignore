@@ -6,6 +6,7 @@
 *.elf.sym
 *.map
 *.dfs
+baserom.dfs.libdragon
 
 # user-supplied ROM (copyright; not shipped) and any extracted assets
 romfs/*.gba
