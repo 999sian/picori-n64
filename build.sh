@@ -155,6 +155,7 @@ mapfile -t OBJS < <(for s in "${ALL_SRCS[@]}"; do obj_of "$s"; done)
 "$N64_INST/bin/mips64-elf-size" "$OUTER/engine.elf"
 
 # ---- package ----------------------------------------------------------------
+mkdir -p "$OUTER/romfs"
 [ -f "$OUTER/romfs/baserom.gba" ] || {
   echo "ERROR: romfs/baserom.gba missing — supply your own USA ROM"
   echo "       (SHA1 b4bd50e4131b027c334547b4524e2dbbd4227130), it is not shipped."
