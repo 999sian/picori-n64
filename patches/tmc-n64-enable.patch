@@ -187,7 +187,7 @@ index fb8ee35b..b00f5b1a 100644
  
  /*
 diff --git a/port/port_rom.c b/port/port_rom.c
-index e22c0803..bc0a90e2 100644
+index e22c0803..7bf37a52 100644
 --- a/port/port_rom.c
 +++ b/port/port_rom.c
 @@ -15,7 +15,9 @@
@@ -282,7 +282,18 @@ index e22c0803..bc0a90e2 100644
          if (value == 0 || (value >= 0x08000000u && value < 0x08000000u + gRomSize)) {
              count = i + 1;
          } else {
-@@ -636,8 +669,7 @@ void* Port_ReadPackedRomPtr(const void* base, u32 index) {
+@@ -601,6 +634,10 @@ extern struct_020227E8 gUnk_020227E8[];
+ 
+ /* Resolved pointer tables */
+ const u8* gGlobalGfxAndPalettes = NULL;
++/* #N64: cart base of the map/gfx blob. gMapData is only a 1 MB RAM placeholder on
++ * N64 but the engine indexes the full ~13 MB blob, so LoadMapData reads src straight
++ * from the cart (gRomData) here and lets the LZ77/DMA path stream it. */
++const u8* gMapDataRomSrc = NULL;
+ const void* gGfxGroups[GFX_GROUPS_COUNT_MAX];
+ const void* gPaletteGroups[PALETTE_GROUPS_COUNT_MAX];
+ 
+@@ -636,8 +673,7 @@ void* Port_ReadPackedRomPtr(const void* base, u32 index) {
      /* For PC `.rodata` stubs we have no size info — trust the caller. */
  
      const u8* readPtr = (const u8*)base + index * 4;
@@ -292,7 +303,7 @@ index e22c0803..bc0a90e2 100644
      if (raw == 0)
          return NULL;
      raw &= ~1u;
-@@ -670,7 +702,7 @@ void* Port_ResolveEwramPtr(u32 gba_addr) {
+@@ -670,7 +706,7 @@ void* Port_ResolveEwramPtr(u32 gba_addr) {
               * PC  layout:  bgSettings(8)  mapData(0x2000)  collisionData(0x1000) ...
               * All fields after bgSettings are shifted by +4 on PC.
               */
@@ -301,7 +312,7 @@ index e22c0803..bc0a90e2 100644
              return (u8*)&gMapBottom + pc_off;
          }
      }
-@@ -680,7 +712,7 @@ void* Port_ResolveEwramPtr(u32 gba_addr) {
+@@ -680,7 +716,7 @@ void* Port_ResolveEwramPtr(u32 gba_addr) {
          const u32 GBA_SIZE = 0xC010u;
          if (gba_addr >= GBA_BASE && gba_addr < GBA_BASE + GBA_SIZE) {
              u32 gba_off = gba_addr - GBA_BASE;
@@ -310,7 +321,7 @@ index e22c0803..bc0a90e2 100644
              return (u8*)&gMapTop + pc_off;
          }
      }
-@@ -933,6 +965,7 @@ static int LoadRomGaps(void) {
+@@ -933,6 +969,7 @@ static int LoadRomGaps(void) {
  }
  
  void Port_LoadRom(const char* path) {
@@ -318,7 +329,7 @@ index e22c0803..bc0a90e2 100644
      memset(sExtractedPages, 0, sizeof(sExtractedPages));
  
      /* ---- Step 1: try loading from rom_data/ extracted pages ---- */
-@@ -1029,6 +1062,14 @@ void Port_LoadRom(const char* path) {
+@@ -1029,6 +1066,14 @@ void Port_LoadRom(const char* path) {
              "No ROM data available after loading.\n\n"
              "The ROM file may be empty or unreadable.");
      }
@@ -333,7 +344,7 @@ index e22c0803..bc0a90e2 100644
  
      /* ---- Step 3: auto-detect ROM region ---- */
      Port_DetectRomRegion(gRomData, gRomSize);
-@@ -1037,11 +1078,36 @@ void Port_LoadRom(const char* path) {
+@@ -1037,11 +1082,36 @@ void Port_LoadRom(const char* path) {
      fprintf(stderr, "Using offsets for %s (game code: %.4s)\n", gRomRegion == ROM_REGION_EU ? "EU" : "USA",
              R->gameCode);
  
@@ -370,7 +381,7 @@ index e22c0803..bc0a90e2 100644
      /* gPalette_549 — Mt Crenel weather-change reads a 26-palette contiguous
       * block starting here. Copy it out of gGlobalGfxAndPalettes (offset 0x44A0
       * — same relative position on USA and EU because the palette ordering in
-@@ -1171,7 +1237,11 @@ void Port_LoadRom(const char* path) {
+@@ -1171,7 +1241,11 @@ void Port_LoadRom(const char* path) {
                  u32 resolvedCount = 0;
                  for (u32 i = 0; i < SPRITE_ANIM_322_COUNT; i++) {
                      u32 gbaPtr;
@@ -382,7 +393,7 @@ index e22c0803..bc0a90e2 100644
                      if (gbaPtr == 0) {
                          break;
                      }
-@@ -1257,6 +1327,10 @@ void Port_LoadRom(const char* path) {
+@@ -1257,7 +1331,12 @@ void Port_LoadRom(const char* path) {
          u32 mapDataSize = gRomSize - R->mapDataBase;
          if (mapDataSize > 0xE00000u)
              mapDataSize = 0xE00000u;
@@ -391,8 +402,10 @@ index e22c0803..bc0a90e2 100644
 +            mapDataSize = 0x100000u; /* gMapData is a 1 MB placeholder on N64 */
 +#endif
          memcpy(gMapData, &gRomData[R->mapDataBase], mapDataSize);
++        gMapDataRomSrc = &gRomData[R->mapDataBase];
          fprintf(stderr, "gMapData loaded (%u bytes from ROM offset 0x%X).\n", mapDataSize, R->mapDataBase);
      }
+ 
 diff --git a/port/port_types.h b/port/port_types.h
 index ba38afbd..328632ca 100644
 --- a/port/port_types.h
@@ -418,6 +431,34 @@ index ba38afbd..328632ca 100644
  typedef int64_t s64;
  
  typedef volatile u8 vu8;
+diff --git a/src/beanstalkSubtask.c b/src/beanstalkSubtask.c
+index 61cff0c0..0cc349d4 100644
+--- a/src/beanstalkSubtask.c
++++ b/src/beanstalkSubtask.c
+@@ -184,7 +184,6 @@ void LoadMapData(MapDataDefinition* dataDefinition) {
+             u32 field_src = Port_ReadU32(raw + 0);
+             u32 field_dest_gba = Port_ReadU32(raw + 4);
+             u32 field_size = Port_ReadU32(raw + 8);
+-
+             if (field_dest_gba != 0) {
+                 dest = Port_ResolveEwramPtr(field_dest_gba);
+                 if (!dest) {
+@@ -192,7 +191,15 @@ void LoadMapData(MapDataDefinition* dataDefinition) {
+                     raw += 12;
+                     continue;
+                 }
++#ifdef TMC_N64
++                {   /* #N64: read from the cart blob, not the 1 MB gMapData placeholder
++                     * (the engine indexes past 1 MB; LZ77/DMA streams it from cart). */
++                    extern const u8* gMapDataRomSrc;
++                    src = (u8*)gMapDataRomSrc + (field_src & 0x7fffffff);
++                }
++#else
+                 src = (u8*)&gMapData + (field_src & 0x7fffffff);
++#endif
+                 if ((field_size & MAP_COMPRESSED) != 0) {
+                     if ((field_dest_gba >> 0x18) == 6) {
+                         LZ77UnCompVram(src, dest);
 diff --git a/src/fade.c b/src/fade.c
 index b67ca34c..ad83a45d 100644
 --- a/src/fade.c
@@ -504,29 +545,6 @@ index 215c24f8..1a6437ee 100644
  
      gArea.currentRoomInfo.map_x = r_hdr->map_x;
      gArea.currentRoomInfo.map_y = r_hdr->map_y;
-diff --git a/src/playerUtils.c b/src/playerUtils.c
-index c58e098f..f487f2d1 100644
---- a/src/playerUtils.c
-+++ b/src/playerUtils.c
-@@ -4092,6 +4092,18 @@ void LoadRoomGfx(void) {
-         MemClear(gMapBottom.mapData, sizeof(gMapBottom.mapData));
-         clearBottomMap = TRUE;
-     }
-+#ifdef TMC_N64
-+    {
-+        unsigned mnz = 0, snz = 0;
-+        for (int i = 0; i < 0x800; i++) {
-+            if (gMapBottom.mapData[i]) mnz++;
-+            if (gMapBottom.subTiles[i]) snz++;
-+        }
-+        fprintf(stderr, "[n64gfx] map[0]=%04x mapData_nz=%u subTiles_nz=%u clearBottom=%d w=%u h=%u\n",
-+                gMapBottom.mapData[0], mnz, snz, (int)clearBottomMap,
-+                (unsigned)gRoomControls.width, (unsigned)gRoomControls.height);
-+    }
-+#endif
-     if (gRoomTransition.field2d == 0) {
-         MemCopy(gMapBottom.mapData, gMapBottom.mapDataOriginal, sizeof(gMapBottom.mapData));
-         MemCopy(gMapTop.mapData, gMapTop.mapDataOriginal, sizeof(gMapBottom.mapData));
 diff --git a/src/room.c b/src/room.c
 index f546ec3b..4c276982 100644
 --- a/src/room.c
