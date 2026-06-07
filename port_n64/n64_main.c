@@ -96,7 +96,7 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up: ON drops into the (now-rendering) demo room; default = stable title */
+int g_n64_autoplay = 0;   /* bring-up: ON = demo-save -> rendering room (Link not yet interactive); default = title */
 int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
                            * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
                            * fall back to software via Port_N64_RDP_FrameSupported. */
@@ -269,6 +269,12 @@ void Port_N64_VBlank(void) {
         extern void Port_N64_ForceGameStart(void);
         static unsigned ap = 0;
         if (gMain.task == 0u && ap == 20u) Port_N64_ForceGameStart();
+        /* walk right once the room is up, so the camera scrolls and the RDP BG-scroll
+         * path is exercised with non-zero BGxHOFS/VOFS (scroll-verify). */
+        if (gMain.task == 2u && ap > 110u) {   /* cycle directions so some axis scrolls */
+            static const unsigned short dirs[4] = { GBA_RIGHT, GBA_DOWN, GBA_LEFT, GBA_UP };
+            k &= (unsigned short)~dirs[(ap / 90u) & 3u];
+        }
         ap++;
     }
     KEYINPUT = k;
@@ -319,10 +325,14 @@ void Port_N64_VBlank(void) {
         if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
             extern Main gMain;
             unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
-            unsigned h0 = *(volatile unsigned short*)(gIoMem + 0x10);
-            unsigned v0 = *(volatile unsigned short*)(gIoMem + 0x12);
-            debugf("[dbg] f=%u task=%u dispcnt=%04x hofs0=%04x vofs0=%04x render_us=%lu\n",
-                   s_dbgf, (unsigned)gMain.task, dispcnt, h0, v0, (unsigned long)s_render_us);
+            unsigned h1 = *(volatile unsigned short*)(gIoMem + 0x14);   /* BG1HOFS (room layer) */
+            unsigned v1 = *(volatile unsigned short*)(gIoMem + 0x16);
+            unsigned h2 = *(volatile unsigned short*)(gIoMem + 0x18);   /* BG2HOFS */
+            extern unsigned short gInput[];   /* [0]=heldKeys [1]=newKeys */
+            unsigned keyin = *(volatile unsigned short*)(gIoMem + 0x130);
+            debugf("[dbg] f=%u task=%u dispcnt=%04x bg1=(%u,%u) KEYIN=%03x held=%03x new=%03x rus=%lu\n",
+                   s_dbgf, (unsigned)gMain.task, dispcnt, h1, v1, keyin,
+                   (unsigned)gInput[0], (unsigned)gInput[1], (unsigned long)s_render_us);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
             for (int bg = 0; bg < 4; bg++) {
