@@ -96,7 +96,7 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path; software ViruaPPU is the fallback */
-int g_n64_autoplay = 0;   /* bring-up: ON = demo-save -> rendering room (Link not yet interactive); default = title */
+int g_n64_autoplay = 0;   /* bring-up: ON = demo-save room (Link rendered, interactivity WIP); default = title */
 int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
                            * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
                            * fall back to software via Port_N64_RDP_FrameSupported. */
@@ -330,9 +330,10 @@ void Port_N64_VBlank(void) {
             unsigned h2 = *(volatile unsigned short*)(gIoMem + 0x18);   /* BG2HOFS */
             extern unsigned short gInput[];   /* [0]=heldKeys [1]=newKeys */
             unsigned keyin = *(volatile unsigned short*)(gIoMem + 0x130);
-            debugf("[dbg] f=%u task=%u dispcnt=%04x bg1=(%u,%u) KEYIN=%03x held=%03x new=%03x rus=%lu\n",
-                   s_dbgf, (unsigned)gMain.task, dispcnt, h1, v1, keyin,
-                   (unsigned)gInput[0], (unsigned)gInput[1], (unsigned long)s_render_us);
+            int px = gPlayerEntity.base.x.HALF.HI, py = gPlayerEntity.base.y.HALF.HI;
+            debugf("[dbg] f=%u task=%u sub=%u bg1=(%u,%u) KEYIN=%03x held=%03x fade=%u link=(%d,%d) rus=%lu\n",
+                   s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, h1, v1, keyin,
+                   (unsigned)gInput[0], (unsigned)gFadeControl.active, px, py, (unsigned long)s_render_us);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
             for (int bg = 0; bg < 4; bg++) {
