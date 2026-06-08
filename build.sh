@@ -196,6 +196,8 @@ cp "$OUTER/engine.elf" "$OUTER/engine.elf.stripped"
   --align 256 "$OUTER/engine.elf.stripped" \
   --align 8 "$OUTER/engine.elf.sym" \
   --align 16 "$OUTER/baserom.dfs"
+"$N64_INST/bin/ed64romconfig" --savetype sram256k "$OUTER/picori.z64" >/dev/null
+
 
 ls -la "$OUTER/picori.z64"
 echo "[done] picori.z64 ready"

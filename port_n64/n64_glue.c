@@ -23,6 +23,11 @@
 /* libdragon PI DMA + cache ops (declared, not via <libdragon.h>, to avoid type
  * clashes with the game headers above). */
 extern void dma_read(void* ram_address, unsigned long pi_address, unsigned long len);
+extern void sram_init(void);
+extern int sram_detect(void);
+extern int sram_read(void* dst, size_t offset, size_t len);
+extern int sram_write(const void* src, size_t offset, size_t len);
+extern void debugf(const char* fmt, ...);
 extern void data_cache_hit_writeback_invalidate(volatile void* addr, unsigned long length);
 static u8 sLz77DmaBuf[0x18000] __attribute__((aligned(16))); /* 96KB cart->RDRAM stage */
 static inline u8 n64_cart_read_u8_lw(const void* data) {
@@ -248,11 +253,62 @@ void Port_LogAssetLoaderStatus(void) {}
 
 /* ===== 3. Subsystem stubs (real N64 impls in later phases) ============= */
 
-/* EEPROM / save */
-u16 EEPROMConfigure(u16 unk_1) { (void)unk_1; return 0; }
-u16 EEPROMRead(u16 address, u16* data) { (void)address; (void)data; return 0; }
-u16 EEPROMCompare(u16 address, const u16* data) { (void)address; (void)data; return 0; }
-u16 EEPROMWrite0_8k_Check(u16 address, const u16* data) { (void)address; (void)data; return 0; }
+/* Save backend: TMC uses the GBA 8 KiB EEPROM layout (8-byte blocks up to
+ * 0x1FA8). N64 EEPROM tops out at 2 KiB, so back the unchanged GBA EEPROM API
+ * with cartridge SRAM and advertise sram256k in build.sh. */
+static int sN64SaveInit;
+static int sN64SaveOk;
+static u32 sN64SaveBytes;
+
+static int N64_SaveEnsure(u32 requestedBytes) {
+    if (!sN64SaveInit) {
+        sram_init();
+        int sz = sram_detect();
+        sN64SaveOk = (sz >= (int)requestedBytes);
+        sN64SaveBytes = sN64SaveOk ? (u32)sz : 0;
+        sN64SaveInit = 1;
+        debugf("[save] sram_detect=%d bytes requested=%lu ok=%d\n", sz, (unsigned long)requestedBytes, sN64SaveOk);
+    }
+    return sN64SaveOk && requestedBytes <= sN64SaveBytes;
+}
+
+u16 EEPROMConfigure(u16 unk_1) {
+    u32 bytes;
+    if (unk_1 == 4) {
+        bytes = 0x200u;
+    } else if (unk_1 == 0x40) {
+        bytes = 0x2000u;
+    } else {
+        bytes = 0x200u; /* match GBA routine: invalid selects 512-byte mode */
+    }
+    return N64_SaveEnsure(bytes) ? 0 : EEPROM_UNSUPPORTED_TYPE;
+}
+
+u16 EEPROMRead(u16 address, u16* data) {
+    u32 offset = (u32)address * 8u;
+    if (!N64_SaveEnsure(0x2000u) || offset + 8u > sN64SaveBytes)
+        return EEPROM_OUT_OF_RANGE;
+    data_cache_hit_writeback_invalidate(data, 8);
+    int read = sram_read(data, offset, 8);
+    data_cache_hit_writeback_invalidate(data, 8);
+    return (read == 8) ? 0 : EEPROM_OUT_OF_RANGE;
+}
+
+u16 EEPROMCompare(u16 address, const u16* data) {
+    u16 tmp[4];
+    u16 ret = EEPROMRead(address, tmp);
+    if (ret != 0)
+        return ret;
+    return (memcmp(tmp, data, 8) == 0) ? 0 : EEPROM_COMPARE_FAILED;
+}
+
+u16 EEPROMWrite0_8k_Check(u16 address, const u16* data) {
+    u32 offset = (u32)address * 8u;
+    if (!N64_SaveEnsure(0x2000u) || offset + 8u > sN64SaveBytes)
+        return EEPROM_OUT_OF_RANGE;
+    data_cache_hit_writeback_invalidate((void*)data, 8);
+    return (sram_write(data, offset, 8) == 8) ? 0 : EEPROM_OUT_OF_RANGE;
+}
 
 /* Audio backend (→ N64 AI in Phase 5) */
 void Port_M4A_Backend_SoundInit(void) {}
