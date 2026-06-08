@@ -774,6 +774,82 @@ index b67ca34c..ad83a45d 100644
      for (int i = 0; i < 16; i++) {
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
+diff --git a/src/fileselect.c b/src/fileselect.c
+index 79f529e6..9ec7c241 100644
+--- a/src/fileselect.c
++++ b/src/fileselect.c
+@@ -26,9 +26,31 @@
+ #include "affine.h"
+ #include "gfx.h"
+ #include "fade.h"
++#ifndef TMC_N64
+ #include "port_ppu.h"
+ #include "port_runtime_config.h"
+ #include "port_tts.h"
++#else
++typedef struct {
++    int priority;
++    float rate;
++    float pitch;
++    float volume;
++    bool32 dedupe;
++} PortTtsOptions;
++#define PORT_TTS_PRIO_URGENT 0
++static inline void Port_TTS_Speak(const char* text, const PortTtsOptions* opts) { (void)text; (void)opts; }
++static inline bool32 Port_Config_PortSettingsMenuEnabled(void) { return FALSE; }
++static inline u32 Port_Config_TargetFps(void) { return 60; }
++static inline void Port_Config_CycleTargetFps(s32 direction) { (void)direction; }
++static inline u32 Port_PPU_WindowScale(void) { return 1; }
++static inline const char* Port_PPU_PresentationModeName(void) { return "n64"; }
++static inline bool32 Port_PPU_IsFullscreen(void) { return FALSE; }
++static inline void Port_PPU_CycleWindowScale(s32 direction) { (void)direction; }
++static inline void Port_PPU_CyclePresentationMode(s32 direction) { (void)direction; }
++static inline void Port_PPU_ToggleFullscreen(void) {}
++static inline void Port_Reborn_NotifyJustResumed(void) {}
++#endif
+ #include <stdio.h>
+ 
+ 
+@@ -295,7 +317,7 @@ static const u16 gUnk_080FC8DE[] = {
+ #define PORT_SETTINGS_DIRTY gChooseFileState.unk_0x10
+ #define PORT_SETTINGS_ROW gChooseFileState.unk_0x20
+ 
+-#ifdef PC_PORT
++#if defined(PC_PORT) && !defined(TMC_N64)
+ /* Save-profile cycling. Step through `tmc[_*].sav` files discovered in cwd;
+  * activating a profile re-reads EEPROM and refreshes the three save-slot
+  * tiles below so the user can immediately see / pick from that profile's
+@@ -876,7 +898,9 @@ static void HandlePortSettingsMenu(void) {
+                 Port_Config_CycleTargetFps(-1);
+             } else if (row == 3) {
+                 Port_PPU_ToggleFullscreen();
+-#ifdef PC_PORT
++#ifdef TMC_N64
++            }
++#elif defined(PC_PORT)
+             } else if (row == PORT_PROFILE_ROW) {
+                 Port_FileSelect_CycleProfile(-1);
+             }
+@@ -895,7 +919,9 @@ static void HandlePortSettingsMenu(void) {
+                 Port_Config_CycleTargetFps(1);
+             } else if (row == 3) {
+                 Port_PPU_ToggleFullscreen();
+-#ifdef PC_PORT
++#ifdef TMC_N64
++            }
++#elif defined(PC_PORT)
+             } else if (row == PORT_PROFILE_ROW) {
+                 Port_FileSelect_CycleProfile(1);
+             }
+@@ -941,7 +967,7 @@ static void DrawPortSettingsMenu(void) {
+     } else {
+         snprintf(sFpsText, sizeof(sFpsText), "%u", (unsigned)fps);
+     }
+-#ifdef PC_PORT
++#if defined(PC_PORT) && !defined(TMC_N64)
+     snprintf(sPortSettingsText, sizeof(sPortSettingsText),
+              "PORT SETTINGS\n\n"
+              "%c Scale %ux\n"
 diff --git a/src/gameUtils.c b/src/gameUtils.c
 index 215c24f8..57cf0227 100644
 --- a/src/gameUtils.c
@@ -923,7 +999,7 @@ index f546ec3b..b0768c9e 100644
      gCurrentRoomProperties = properties;
      for (i = 0; i < 8; ++i) {
 diff --git a/src/title.c b/src/title.c
-index f7b7813b..0d447183 100644
+index f7b7813b..52e801e7 100644
 --- a/src/title.c
 +++ b/src/title.c
 @@ -79,7 +79,7 @@ static const u16 sLightRaysAlphaBlends[] = {
@@ -959,7 +1035,7 @@ index f7b7813b..0d447183 100644
  static void ExitTitlescreen(void) {
      if (!gFadeControl.active) {
 -#ifdef DEMO_JP
-+#if defined(DEMO_JP) || defined(TMC_N64)
++#if defined(DEMO_JP)
          MemCopy(&gDemoSave, &gSave, sizeof(gSave));
          SetTask(TASK_GAME);
  #else
@@ -968,9 +1044,9 @@ index f7b7813b..0d447183 100644
  }
  
 +#if defined(TMC_N64) && !defined(DEMO_JP)
-+/* #N64: file-select is host-dependent and not yet compiled. The bring-up harness
-+ * (port/n64/n64_main.c) calls this after a few title frames to drop straight into
-+ * gameplay via the demo save, bypassing the title intro/input state machine. */
++/* #N64: explicit bring-up harness entry point. Normal title START now follows
++ * the GBA path into TASK_FILE_SELECT; the harness can still bypass to gameplay
++ * when it deliberately needs a bounded room-render repro. */
 +void Port_N64_ForceGameStart(void) {
 +    MemCopy(&gDemoSave, &gSave, sizeof(gSave));
 +    SetTask(TASK_GAME);

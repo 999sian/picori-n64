@@ -95,10 +95,10 @@ CFLAGS="-march=vr4300 -mtune=vr4300 -mabi=o64 -G0 \
   $DEFINES $INCLUDE"
 
 # ---- source set -------------------------------------------------------------
-# Shared engine: all tmc/src/*.c except the three the port replaces — eeprom.c
-# (save hardware), fileselect.c (host SDL/glibc), gba/m4a.c (audio engine).
+# Shared engine: all tmc/src/*.c except the two the port replaces — eeprom.c
+# (save hardware) and gba/m4a.c (audio engine).
 mapfile -t SRCS < <(cd "$ROOT" && find src -name '*.c' \
-  ! -name eeprom.c ! -name fileselect.c ! -path 'src/gba/m4a.c' | sort | sed "s#^#$ROOT/#")
+  ! -name eeprom.c ! -path 'src/gba/m4a.c' | sort | sed "s#^#$ROOT/#")
 
 # Reused PC bridge (allowlist: desktop/SDL TUs excluded) + ViruaPPU, from the
 # submodule. The PC bug-repro harnesses (port_repro_*.c) are PC-only scaffolding

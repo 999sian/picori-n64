@@ -219,9 +219,6 @@ void ObjAffineSet(struct ObjAffineSrcData* src, void* dest, s32 count, s32 offse
 
 /* ===== 2. ROM / asset data (filled by the Phase-3 boot loader) ========= */
 
-/* Opaque blob; defined here only to satisfy the extern (figurine menu data). */
-const unsigned char gUnk_080FC3E4[2048] = {0};
-
 void* Port_GetSpriteAnimationData(u32 a) { (void)a; return 0; }
 void* Port_GetMapAssetDataByIndex(u32 a) { (void)a; return 0; }
 /* #N64: real check (the asset-loader impl is excluded). A RoomHeader (0xA bytes)
@@ -338,7 +335,5 @@ int  Port_Reborn_ConsumeJustResumed(void) { return 0; }
 int  Port_AudioMute_ShouldSuppress(u32 category) { (void)category; return 0; }
 int  Rando_OverrideItem(u32 item, u32 ctx) { (void)ctx; return (int)item; }
 
-/* Engine fns from the two TUs not yet compiled (fileselect.c, asm) */
-void  FileSelectTask(void) {}
-void* CreateDialogBox(u32 a, u32 b, u32 c) { (void)a; (void)b; (void)c; return 0; }
-void  sub_08050384(void) {}
+/* Engine fns from asm/TUs not yet compiled. File-select/dialogs are compiled
+ * from src/fileselect.c now that the SRAM save backend exists. */
