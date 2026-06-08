@@ -176,8 +176,18 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     rdpq_mode_alphacompare(1);   /* TLUT alpha 0 (bank index 0) = transparent */
     rdpq_tex_upload_tlut(sRdpTlut, 0, 256);
 
-    /* Draw enabled tiled BGs back-to-front (BG3..BG0; BG0 ends up on top). */
-    for (int bg = 3; bg >= 0; bg--) {
+    /* Draw enabled tiled BGs back-to-front by GBA priority (higher BGxCNT priority
+     * value = further back; ties broken by higher BG index, matching GBA). The old
+     * fixed BG3..BG0 order ignored priority: the title's BG2 sword (priority 1 =
+     * front) was drawn before BG1 forest (priority 3) and hidden behind it. */
+    int bgpri[4];
+    for (int b = 0; b < 4; b++) bgpri[b] = (*(volatile unsigned short*)(gIoMem + 0x08 + b * 2)) & 3u;
+    int bgord[4], bgn = 0;
+    for (int pr = 3; pr >= 0; pr--)
+        for (int b = 3; b >= 0; b--)
+            if (bgpri[b] == pr) bgord[bgn++] = b;
+    for (int oi = 0; oi < 4; oi++) {
+        int bg = bgord[oi];
         if (!(dispcnt & (0x100u << bg))) continue;
         unsigned bgcnt = *(volatile unsigned short*)(gIoMem + 0x08 + bg * 2);
         uint32_t char_base   = ((bgcnt >> 2) & 3u) * 0x4000u;
@@ -398,6 +408,42 @@ void Port_N64_VBlank(void) {
                 line[60] = 0;
                 debugf("[fb] %s\n", line);
             }
+        }
+        if (s_dbgf == 599u) {   /* one-shot: BG2 map fill + N64 OAM (sword/copyright) */
+            extern unsigned char gVram[];
+            extern unsigned short gOamMem[];
+            unsigned bg2 = *(volatile unsigned short*)(gIoMem + 0x0C);
+            unsigned sb2 = ((bg2 >> 8) & 0x1Fu) * 0x800u;
+            int nz = 0; for (int i = 0; i < 1024; i++) if (gVram[sb2 + i]) nz++;
+            debugf("[bg2map] sb=%05x nonzero=%d/1024\n", sb2, nz);
+            for (int i = 0; i < 24; i++) {
+                unsigned a0 = gOamMem[i*4], a1 = gOamMem[i*4+1], a2 = gOamMem[i*4+2];
+                unsigned y = a0 & 0xff, x = a1 & 0x1ff, tile = a2 & 0x3ff, pal = (a2 >> 12) & 0xf;
+                unsigned aff = (a0 >> 8) & 1, m8 = (a0 >> 13) & 1, dis = (a0 >> 9) & 1;
+                if (!aff && dis) continue;
+                debugf("[oam] %d y=%u x=%u tile=%u pal=%u aff=%u 8=%u\n", i, y, x, tile, pal, aff, m8);
+            }
+        }
+        if (s_dbgf == 600u) {   /* one-shot: dump centered 240x160 framebuffer as hex (host rebuilds PNG) */
+            data_cache_hit_writeback_invalidate(disp->buffer, (unsigned long)disp->stride * 240u);
+            const uint32_t* fbuf = (const uint32_t*)disp->buffer;
+            int dstride = disp->stride / 4;
+            static const char hx[] = "0123456789abcdef";
+            debugf("[FBDUMP] BEGIN 240 160\n");
+            for (int y = 0; y < 160; y++) {
+                for (int half = 0; half < 2; half++) {
+                    char line[120 * 6 + 1]; int p = 0;
+                    for (int x = half * 120; x < half * 120 + 120; x++) {
+                        uint32_t px = fbuf[(40 + y) * dstride + (40 + x)];
+                        unsigned r = (px >> 24) & 0xFFu, g = (px >> 16) & 0xFFu, b = (px >> 8) & 0xFFu;
+                        line[p++] = hx[r >> 4]; line[p++] = hx[r & 15];
+                        line[p++] = hx[g >> 4]; line[p++] = hx[g & 15];
+                        line[p++] = hx[b >> 4]; line[p++] = hx[b & 15];
+                    }
+                    line[p] = 0; debugf("[FBR %d %d]%s\n", y, half, line);
+                }
+            }
+            debugf("[FBDUMP] END\n");
         }
         s_dbgf++;
     }
