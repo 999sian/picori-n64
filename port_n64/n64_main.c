@@ -96,7 +96,7 @@ static uint16_t sObjPlttBE[256];
  * HIGH, so the char block is nibble-swapped into a scratch each frame. Drawn
  * centered (240x160) into the 320x240 framebuffer. */
 int g_n64_use_rdp = 1;    /* RDP render path (chunked TMEM upload); software is the fallback */
-int g_n64_autoplay = 0;   /* bring-up: ON = demo-save room (Link rendered, interactivity WIP); default = title */
+int g_n64_autoplay = 0;   /* bring-up: ON = demo-save room (gameplay WIP); default = title */
 int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
                            * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
                            * fall back to software via Port_N64_RDP_FrameSupported. */
@@ -235,28 +235,53 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         }
         data_cache_hit_writeback(sCharScratch, span);
         surface_t chars = surface_make(sCharScratch, FMT_CI4, 8, (int)(span * 2u / 8u), 4);
-        /* 21x31 tiles: one extra row/col so the partial edge tiles from a sub-tile
-         * scroll are covered; the viewport scissor clips the overhang. */
+        unsigned ntiles = span * 2u / 64u;          /* 8x8 CI4 tiles in the char block */
+        /* Collect the 21x31 visible tiles, then batch TMEM uploads by (32-tile page x
+         * palette) instead of per-tile. 32 tiles = 256 rows x 8B CI4 TMEM pitch = 2KB,
+         * the CI4 texel half of TMEM (TLUT takes the other half). Cuts rdpq_tex_upload
+         * count ~10x (fixes the
+         * gopher64 'Exhausted LinkedDeviceHost memory' OOM + upload overhead). Tiles
+         * occupy distinct 8x8 screen cells (no overdraw) so reorder is pixel-safe. */
+        static struct { int16_t dx, dy; uint16_t idx; uint8_t pal, fl; } vis[21 * 31];
+        int nvis = 0;
         for (int ty = 0; ty <= 20; ty++) {
             for (int tx = 0; tx <= 30; tx++) {
                 unsigned mtx = (tx0 + (unsigned)tx) & (map_w - 1u);
                 unsigned mty = (ty0 + (unsigned)ty) & (map_h - 1u);
-                unsigned sb  = (mty >> 5) * sbcols + (mtx >> 5);   /* screenblock index */
+                unsigned sb  = (mty >> 5) * sbcols + (mtx >> 5);
                 uint32_t map_addr = screen_base + sb * 0x800u
                                   + (((mty & 31u) * 32u + (mtx & 31u)) * 2u);
                 uint16_t entry = (uint16_t)gVram[map_addr] | ((uint16_t)gVram[map_addr + 1u] << 8u);
-                unsigned tile_idx = entry & 0x3FFu;
-                unsigned pal = (entry >> 12) & 0xFu;
-                int hflip = (entry >> 10) & 1, vflip = (entry >> 11) & 1;
-                surface_t ts = surface_make_sub(&chars, 0, (int)tile_idx * 8, 8, 8);
+                vis[nvis].dx  = (int16_t)(40 + tx * 8 - px0);
+                vis[nvis].dy  = (int16_t)(40 + ty * 8 - py0);
+                vis[nvis].idx = (uint16_t)(entry & 0x3FFu);
+                vis[nvis].pal = (uint8_t)((entry >> 12) & 0xFu);
+                vis[nvis].fl  = (uint8_t)((entry >> 10) & 3u);   /* bit0 hflip, bit1 vflip */
+                nvis++;
+            }
+        }
+        for (unsigned pbase = 0; pbase < ntiles; pbase += 32u) {
+            unsigned pageH = (ntiles - pbase < 32u) ? (ntiles - pbase) : 32u;
+            unsigned palmask = 0;
+            for (int i = 0; i < nvis; i++)
+                if (vis[i].idx >= pbase && vis[i].idx < pbase + pageH)
+                    palmask |= 1u << vis[i].pal;
+            if (!palmask) continue;
+            surface_t pageSurf = surface_make_sub(&chars, 0, (int)pbase * 8, 8, (int)pageH * 8);
+            for (int pal = 0; pal < 16; pal++) {
+                if (!(palmask & (1u << (unsigned)pal))) continue;
                 rdpq_texparms_t parms = {0};
-                parms.palette = (int)pal;
-                parms.s.repeats = 1; parms.t.repeats = 1;
-                rdpq_tex_upload(TILE0, &ts, &parms);
-                int dx = 40 + tx * 8 - px0, dy = 40 + ty * 8 - py0;
-                int s0 = hflip ? 8 : 0, s1 = hflip ? 0 : 8;
-                int t0 = vflip ? 8 : 0, t1 = vflip ? 0 : 8;
-                rdpq_texture_rectangle_scaled(TILE0, dx, dy, dx + 8, dy + 8, s0, t0, s1, t1);
+                parms.palette = pal; parms.s.repeats = 1; parms.t.repeats = 1;
+                rdpq_tex_upload(TILE0, &pageSurf, &parms);
+                for (int i = 0; i < nvis; i++) {
+                    if (vis[i].idx < pbase || vis[i].idx >= pbase + pageH || vis[i].pal != pal) continue;
+                    int t = (int)((unsigned)vis[i].idx - pbase) * 8;
+                    int hflip = vis[i].fl & 1, vflip = (vis[i].fl >> 1) & 1;
+                    int s0 = hflip ? 8 : 0, s1 = hflip ? 0 : 8;
+                    int t0 = t + (vflip ? 8 : 0), t1 = t + (vflip ? 0 : 8);
+                    rdpq_texture_rectangle_scaled(TILE0, vis[i].dx, vis[i].dy,
+                                                  vis[i].dx + 8, vis[i].dy + 8, s0, t0, s1, t1);
+                }
             }
         }
         rspq_wait();   /* RDP done with sCharScratch before the next BG overwrites it */
