@@ -114,6 +114,20 @@ static inline uint16_t bgr555_to_rgba5551(uint16_t c, int opaque) {
  * the rdpq_attach session after the BG pass. Assumes scissor = GBA viewport. */
 static const uint8_t sObjW[3][4] = {{8,16,32,64},{16,32,32,64},{8,8,16,32}};
 static const uint8_t sObjH[3][4] = {{8,16,32,64},{8,8,16,32},{16,32,32,64}};
+static void Port_N64_RDP_SetTexBlend(int blend, unsigned eva, unsigned evb) {
+    if (blend && (eva | evb)) {
+        unsigned denom = eva + evb;
+        unsigned alpha = (denom != 0u) ? ((eva * 255u + (denom >> 1)) / denom) : 255u;
+        if (alpha > 255u) alpha = 255u;
+        rdpq_mode_combiner(RDPQ_COMBINER1((0, 0, 0, TEX0), (0, 0, 0, ENV)));
+        rdpq_set_env_color(RGBA32(0, 0, 0, alpha));
+        rdpq_mode_blender(RDPQ_BLENDER((IN_RGB, IN_ALPHA, MEMORY_RGB, INV_MUX_ALPHA)));
+    } else {
+        rdpq_mode_blender(0);
+        rdpq_mode_combiner(RDPQ_COMBINER_TEX);
+    }
+}
+
 static void Port_N64_RDP_RenderOBJ(unsigned dispcnt) {
     int obj_1d = (dispcnt >> 6) & 1;
     for (int i = 0; i < 256; i++)
@@ -175,6 +189,14 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     rdpq_mode_tlut(TLUT_RGBA16);
     rdpq_mode_alphacompare(1);   /* TLUT alpha 0 (bank index 0) = transparent */
     rdpq_tex_upload_tlut(sRdpTlut, 0, 256);
+    unsigned bldcnt = *(volatile unsigned short*)(gIoMem + 0x50);
+    unsigned bldalpha = *(volatile unsigned short*)(gIoMem + 0x52);
+    unsigned bld_effect = (bldcnt >> 6u) & 3u;
+    unsigned eva = bldalpha & 0x1Fu;
+    unsigned evb = (bldalpha >> 8u) & 0x1Fu;
+    if (eva > 16u) eva = 16u;
+    if (evb > 16u) evb = 16u;
+
 
     /* Draw enabled tiled BGs back-to-front by GBA priority (higher BGxCNT priority
      * value = further back; ties broken by higher BG index, matching GBA). The old
@@ -198,6 +220,8 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         unsigned sbcols = map_w >> 5;                /* screenblocks across */
         unsigned hofs = (*(volatile unsigned short*)(gIoMem + 0x10 + bg * 4)) & 0x1FFu;
         unsigned vofs = (*(volatile unsigned short*)(gIoMem + 0x12 + bg * 4)) & 0x1FFu;
+        int blend_bg = (bld_effect == 1u) && ((bldcnt & (1u << (unsigned)bg)) != 0u) && ((bldcnt & 0x3F00u) != 0u);
+        Port_N64_RDP_SetTexBlend(blend_bg, eva, evb);
         int px0 = (int)(hofs & 7u), py0 = (int)(vofs & 7u);  /* sub-tile pixel offset */
         unsigned tx0 = hofs >> 3, ty0 = vofs >> 3;           /* first visible tile */
         if ((dispcnt & 7u) == 1u && bg == 2) {
@@ -286,16 +310,17 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
         }
         rspq_wait();   /* RDP done with sCharScratch before the next BG overwrites it */
     }
+    Port_N64_RDP_SetTexBlend(0, 0, 0);
     if (dispcnt & 0x1000u) Port_N64_RDP_RenderOBJ(dispcnt);   /* sprites on top */
     rdpq_detach_wait();
 }
 
 /* Does the RDP path render this frame correctly? It handles mode-0 tiled BGs (with
  * scroll, per-tile H/V flip, multi-screenblock sizes) + mode-1 (text BG0/1 + affine BG2,
- * e.g. the title) + non-affine 4bpp OBJ. Affine/8bpp OBJ and blend are NOT RDP-handled,
- * but no longer drop the whole frame to software: the BGs render on RDP and RenderOBJ
- * skips the sprites it can't do (blend ignored -> opaque). Only mode 2+ and hardware
- * windows still fall back to the software ViruaPPU path. */
+ * e.g. the title) + non-affine 4bpp OBJ. BG alpha blend is approximated with an
+ * RDP fixed-alpha blend against the already-rendered lower layers. Affine/8bpp OBJ
+ * frames keep their BGs on RDP and RenderOBJ skips the sprites it can't do. Only
+ * mode 2+ and hardware windows still fall back to the software ViruaPPU path. */
 static int Port_N64_RDP_FrameSupported(void) {
     unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
     if ((dispcnt & 7u) > 1u)  return 0;   /* mode 2+: not handled */
