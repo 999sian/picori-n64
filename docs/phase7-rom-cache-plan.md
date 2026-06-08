@@ -1,3 +1,24 @@
+> **CORRECTION (2026-06-08, after profiling — this re-prioritizes the doc).**
+> The "profile first" step disproved the premise below. With heartbeats in
+> `GameMain_InitRoom`/`InitializeEntities`, gopher64 prints **`[gir] InitRoom DONE`**
+> — i.e. the gameplay room **loads fine and fast** (all 14 init sub-calls + DMA/LZ77
+> bulk loads complete). The stall is **not** ROM-read perf. The log then ends with
+> gopher64's `Exhausted LinkedDeviceHost memory`, and ares crawls at <0.1 fps at the
+> same point. ⇒ **The real gameplay keystone is RDP per-tile RENDERING perf, not ROM
+> caching.** A dense gameplay room is ~651 tiles × 3 BGs + OBJ = thousands of
+> `rdpq_tex_upload`+`texrect` per frame (`Port_N64_RDP_RenderFrame`,
+> `port_n64/n64_main.c`); each per-tile TMEM upload is a Vulkan resource in gopher64
+> (→ OOM) and the texrect volume crawls ares. The title screen renders fine only
+> because its BGs are sparse.
+>
+> **Re-prioritized next step: RDP per-tile-upload optimization** (batch TMEM:
+> load a 4 KB CI4 page = 128 tiles once, draw visible tiles in that page via
+> tex-coords; group by palette since the CI4 16-colour bank is per-tile). HARD: the
+> earlier `rdpq_tex_multi`/`reuse` attempt hung the RDP (solid-pink, f=0) and was
+> reverted — needs a careful manual page+palette batching pass. The ROM-cache plan
+> below stays valid as a *hardware* perf nicety but is **not** what's blocking
+> gameplay verification on emulator.
+
 # Phase-7 — Fast ROM access (RDRAM caching)
 
 Keystone for the gameplay-gated roadmap. Gameplay is *functionally* reached on N64
