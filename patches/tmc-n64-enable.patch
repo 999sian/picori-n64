@@ -734,10 +734,30 @@ index 215c24f8..1a6437ee 100644
      gArea.currentRoomInfo.map_x = r_hdr->map_x;
      gArea.currentRoomInfo.map_y = r_hdr->map_y;
 diff --git a/src/room.c b/src/room.c
-index f546ec3b..4c276982 100644
+index f546ec3b..b0768c9e 100644
 --- a/src/room.c
 +++ b/src/room.c
-@@ -72,6 +72,19 @@ Entity* LoadRoomEntity(const EntityData* dat) {
+@@ -58,9 +58,19 @@ static void LoadLocationTile(TileEntity*);
+ 
+ void LoadRoomEntityList(const EntityData* listPtr) {
+     if (listPtr != NULL) {
++#ifdef TMC_N64
++        /* #N64: listPtr is a KSEG1 cart pointer; a direct byte read of ->kind (lbu)
++         * is broken on the strict PI bus, so the 0xFF terminator is never matched ->
++         * infinite loop hanging room load on ares (LoadRoom->here). kind is
++         * EntityData offset 0, so read the first word with lw (cart-safe) and take
++         * its MSB on big-endian. listPtr is 16-byte-aligned (sizeof EntityData). */
++        while ((*(const volatile uint32_t*)listPtr >> 24) != 0xFFu)
++            LoadRoomEntity(listPtr++);
++#else
+         while (listPtr->kind != 0xFF) {
+             LoadRoomEntity(listPtr++);
+         }
++#endif
+     }
+ }
+ 
+@@ -72,6 +82,25 @@ Entity* LoadRoomEntity(const EntityData* dat) {
  #ifndef NON_MATCHING
      asm("" ::: "r5");
  #endif
@@ -747,7 +767,13 @@ index f546ec3b..4c276982 100644
 +     * = bswap of 0x080FDD14, crashing room load). Swap into a local copy used both
 +     * for the reads below and for the MemCopy into the entity (read back natively).
 +     * The u8 fields (kind/flags/id/type) are unaffected. */
-+    EntityData n64sw = *dat;
++    /* #N64 cart-safe read: a plain struct copy from the KSEG1 cart can compile to
++     * lbu/lhu, which are broken on ares' strict PI bus (hangs/garbage). Force four
++     * 32-bit lw reads (the only cart-safe width) into the local, then byte-swap. */
++    EntityData n64sw;
++    { const volatile uint32_t* _s = (const volatile uint32_t*)dat;
++      uint32_t* _d = (uint32_t*)&n64sw;
++      _d[0] = _s[0]; _d[1] = _s[1]; _d[2] = _s[2]; _d[3] = _s[3]; }
 +    n64sw.type2     = __builtin_bswap32(n64sw.type2);
 +    n64sw.xPos      = __builtin_bswap16(n64sw.xPos);
 +    n64sw.yPos      = __builtin_bswap16(n64sw.yPos);
@@ -757,7 +783,7 @@ index f546ec3b..4c276982 100644
  
      kind = dat->kind & 0xF;
      if ((dat->flags & 0xF0) == 0x50 && DeepFindEntityByID(kind, dat->id))
-@@ -329,6 +342,16 @@ static bool32 IsRoomPropertyListInRom(void** properties) {
+@@ -329,6 +358,16 @@ static bool32 IsRoomPropertyListInRom(void** properties) {
  
  void sub_0804AFB0(void** properties) {
      u32 i;
