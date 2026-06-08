@@ -329,6 +329,10 @@ void Port_M4A_Backend_ContinuePlayer(uint8_t playerIndex) { (void)playerIndex; }
 void Port_M4A_Backend_SetTrackVolume(uint8_t playerIndex, uint16_t trackBits, uint16_t volume) { (void)playerIndex; (void)trackBits; (void)volume; }
 void Port_M4A_Backend_SetTrackPan(uint8_t playerIndex, uint16_t trackBits, int8_t pan) { (void)playerIndex; (void)trackBits; (void)pan; }
 bool Port_M4A_Backend_IsPlayerActive(uint8_t playerIndex) { (void)playerIndex; return false; }
+void Port_M4A_Backend_Render(int16_t* outSamples, uint32_t frameCount, bool mute) {
+    (void)mute;   /* no synth yet: emit silence (stereo interleaved int16) */
+    if (outSamples) memset(outSamples, 0, (size_t)frameCount * 2u * sizeof(int16_t));
+}
 
 /* Soft-slots / input (→ N64 pad in Phase 6) */
 int  Port_SoftSlots_GetEffectiveBItem(void) { return 0; }

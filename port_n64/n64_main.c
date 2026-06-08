@@ -100,6 +100,41 @@ int g_n64_autoplay = 0;   /* bring-up: ON = demo-save room (gameplay WIP); defau
 int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that gameplay renders.
                            * Non-affine 4bpp sprites via RDP; affine/8bpp OBJ frames still
                            * fall back to software via Port_N64_RDP_FrameSupported. */
+/* --- N64 AI output service -------------------------------------------------
+ * Drives the libdragon AI DAC from the per-frame VBlank hook — the integration
+ * point the M4A synth will feed. The synth is NOT implemented yet, so
+ * Port_M4A_Backend_Render fills silence; g_n64_audio_selftest fills a test tone
+ * to prove the DAC path end-to-end (audible on HW; verifiable headlessly via
+ * s_audio_buffers, which only keeps rising while the AI is actually draining
+ * buffers). Both flags default OFF, so the shipped ROM is unaffected. */
+int g_n64_audio          = 0;
+int g_n64_audio_selftest = 0;
+static unsigned long s_audio_buffers = 0;
+static int      s_audio_inited = 0;
+static unsigned s_audio_phase  = 0;
+
+static void Port_N64_AudioService(void) {
+    if (!g_n64_audio) return;
+    if (!s_audio_inited) { audio_init(32000, 4); s_audio_inited = 1; }
+    int n = audio_get_buffer_length();   /* stereo frames per buffer */
+    while (audio_can_write()) {
+        short* buf = audio_write_begin();
+        if (g_n64_audio_selftest) {
+            for (int i = 0; i < n; i++) {
+                short s = (s_audio_phase & 0x40u) ? 7000 : -7000;  /* ~250Hz square @32kHz */
+                s_audio_phase++;
+                buf[2 * i] = s;
+                buf[2 * i + 1] = s;
+            }
+        } else {
+            extern void Port_M4A_Backend_Render(int16_t* out, uint32_t frames, bool mute);
+            Port_M4A_Backend_Render(buf, (uint32_t)n, false);   /* silence until the synth lands */
+        }
+        audio_write_end();
+        s_audio_buffers++;
+    }
+}
+
 static uint8_t  sCharScratch[0x8000] __attribute__((aligned(16)));
 static uint16_t sRdpTlut[256]        __attribute__((aligned(16)));
 
@@ -356,6 +391,7 @@ void Port_N64_VBlank(void) {
         ap++;
     }
     KEYINPUT = k;
+    Port_N64_AudioService();
 
     /* Palette colors are GBA little-endian in gBgPltt/gObjPltt; byte-swap into
      * the BE scratch ViruaPPU reads, so native palette reads give right colors.
@@ -419,9 +455,9 @@ void Port_N64_VBlank(void) {
                 if (!aff && ((a0 >> 9) & 1)) continue;   /* hidden */
                 nobj++; if (aff) naff++; if ((a0 >> 13) & 1) n8++;
             }
-            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x bg1=%u,%u bg2=%u,%u obj=%d aff=%d 8bpp=%d KEYIN=%03x rus=%lu\n",
+            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x bg1=%u,%u bg2=%u,%u obj=%d aff=%d 8bpp=%d KEYIN=%03x rus=%lu aud=%lu\n",
                    s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, h1, v1, h2, v2, nobj, naff, n8,
-                   keyin, (unsigned long)s_render_us);
+                   keyin, (unsigned long)s_render_us, s_audio_buffers);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
             for (int bg = 0; bg < 4; bg++) {

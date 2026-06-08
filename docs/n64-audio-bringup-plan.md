@@ -1,9 +1,10 @@
 # N64 Audio Bring-Up Plan
 
-**Status: NOT IMPLEMENTED (game is silent).** The M4A *bookkeeping* ABI is now
-correct on N64 (see below); the actual synthesizer + AI output is the remaining
-large piece. This doc is the runway for that work — it is not a claim that audio
-works.
+**Status: AI output path landed + verified; synth NOT implemented (game is
+silent).** The M4A *bookkeeping* ABI is correct and the **libdragon AI DAC output
+service is wired and proven end-to-end** (gated, default off). The remaining large
+piece is the actual M4A *synthesizer* — until it lands, the output is silence.
+This doc is the runway for that work; it is not a claim that game audio plays.
 
 ## Current state (2026-06-08)
 
@@ -23,6 +24,15 @@ works.
   implements the full hook set as a consistent "nothing playing" backend
   (`StartSongById`/`IsPlayerActive` → false). Result: bookkeeping is correct and
   hang-safe; output is still silence.
+- **AI output service landed + verified.** `port_n64/n64_main.c::Port_N64_AudioService`
+  drives the libdragon AI DAC from the per-frame VBlank hook (`audio_init(32000,4)`
+  + `audio_write_begin/_end`), calling `Port_M4A_Backend_Render` per buffer. Gated
+  by `g_n64_audio` / `g_n64_audio_selftest` (both **default off** → shipped ROM
+  unaffected). Verified on ares: with the self-test tone on, the `aud=` telemetry
+  counter rises monotonically (~1.7 buffers/frame, no underrun/crash), proving the
+  AI is actively draining buffers (a 250 Hz square is clocked to the DAC). This is
+  the exact buffer the synth will fill — only `Port_M4A_Backend_Render` (currently
+  silence) needs replacing with real samples.
 
 ## Available libdragon APIs (verified present)
 
@@ -66,4 +76,6 @@ Reuse the cross-platform numeric-parity method already proven for the framebuffe
 ## Scope
 
 Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as a multi-month
-item. The ABI fix above is the only part landed; the synth + AI output remain.
+item. Landed so far: the M4A bookkeeping ABI fix and the AI output service
+(verified). Remaining: the synth itself — replace `Port_M4A_Backend_Render`'s
+silence with real M4A synthesis (option 1 or 2 above).
