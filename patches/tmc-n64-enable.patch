@@ -180,7 +180,7 @@ index 3b9ab661..066ae9b4 100644
  bool Port_Audio_Init(void);
  void Port_Audio_Shutdown(void);
 diff --git a/port/port_draw.c b/port/port_draw.c
-index 2f3b0df3..1a524262 100644
+index 2f3b0df3..5f329f93 100644
 --- a/port/port_draw.c
 +++ b/port/port_draw.c
 @@ -54,6 +54,16 @@ static inline u32 ReadU32Unaligned(const void* p) {
@@ -249,6 +249,25 @@ index 2f3b0df3..1a524262 100644
          ip += 4;
  
          /* Build attr2: tile number + priority + palette */
+@@ -693,7 +721,18 @@ static void ResolveEntitySpriteParams(Entity* entity, s32* outX, s32* outY, u32*
+ 
+     /* Load 32-bit word at offset 0x18: spriteSettings|spriteRendering|palette|spriteOrientation */
+     u32 ip = 0;
++#ifdef TMC_N64
++    /* #N64 BE: r8 below masks ip with 0x3E003F00, which assumes the 4 bytes at
++     * offset 0x18 sit at little-endian positions (settings=b0, rendering=b1,
++     * palette=b2, orientation=b3). A native memcpy reverses them on big-endian,
++     * so attr0's mode bits (8-13: affine/8bpp/...) get pulled from the palette
++     * byte instead of spriteRendering -> title logo sprites wrongly flagged
++     * affine/8bpp and dropped by the OBJ path. Read the word little-endian. */
++    { const u8* _p = (const u8*)&entity->spriteSettings;
++      ip = (u32)_p[0] | ((u32)_p[1] << 8) | ((u32)_p[2] << 16) | ((u32)_p[3] << 24); }
++#else
+     memcpy(&ip, &entity->spriteSettings, sizeof(ip));
++#endif
+ 
+     /* Build attr2 base (extra): tile + priority + palette */
+     u16 sb = entity->spriteVramOffset;
 diff --git a/port/port_gameplay_stubs.c b/port/port_gameplay_stubs.c
 index 1f2ad7b9..eae73595 100644
 --- a/port/port_gameplay_stubs.c
