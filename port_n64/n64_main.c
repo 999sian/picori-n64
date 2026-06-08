@@ -409,42 +409,6 @@ void Port_N64_VBlank(void) {
                 debugf("[fb] %s\n", line);
             }
         }
-        if (s_dbgf == 599u) {   /* one-shot: BG2 map fill + N64 OAM (sword/copyright) */
-            extern unsigned char gVram[];
-            extern unsigned short gOamMem[];
-            unsigned bg2 = *(volatile unsigned short*)(gIoMem + 0x0C);
-            unsigned sb2 = ((bg2 >> 8) & 0x1Fu) * 0x800u;
-            int nz = 0; for (int i = 0; i < 1024; i++) if (gVram[sb2 + i]) nz++;
-            debugf("[bg2map] sb=%05x nonzero=%d/1024\n", sb2, nz);
-            for (int i = 0; i < 24; i++) {
-                unsigned a0 = gOamMem[i*4], a1 = gOamMem[i*4+1], a2 = gOamMem[i*4+2];
-                unsigned y = a0 & 0xff, x = a1 & 0x1ff, tile = a2 & 0x3ff, pal = (a2 >> 12) & 0xf;
-                unsigned aff = (a0 >> 8) & 1, m8 = (a0 >> 13) & 1, dis = (a0 >> 9) & 1;
-                if (!aff && dis) continue;
-                debugf("[oam] %d y=%u x=%u tile=%u pal=%u aff=%u 8=%u\n", i, y, x, tile, pal, aff, m8);
-            }
-        }
-        if (s_dbgf == 600u) {   /* one-shot: dump centered 240x160 framebuffer as hex (host rebuilds PNG) */
-            data_cache_hit_writeback_invalidate(disp->buffer, (unsigned long)disp->stride * 240u);
-            const uint32_t* fbuf = (const uint32_t*)disp->buffer;
-            int dstride = disp->stride / 4;
-            static const char hx[] = "0123456789abcdef";
-            debugf("[FBDUMP] BEGIN 240 160\n");
-            for (int y = 0; y < 160; y++) {
-                for (int half = 0; half < 2; half++) {
-                    char line[120 * 6 + 1]; int p = 0;
-                    for (int x = half * 120; x < half * 120 + 120; x++) {
-                        uint32_t px = fbuf[(40 + y) * dstride + (40 + x)];
-                        unsigned r = (px >> 24) & 0xFFu, g = (px >> 16) & 0xFFu, b = (px >> 8) & 0xFFu;
-                        line[p++] = hx[r >> 4]; line[p++] = hx[r & 15];
-                        line[p++] = hx[g >> 4]; line[p++] = hx[g & 15];
-                        line[p++] = hx[b >> 4]; line[p++] = hx[b & 15];
-                    }
-                    line[p] = 0; debugf("[FBR %d %d]%s\n", y, half, line);
-                }
-            }
-            debugf("[FBDUMP] END\n");
-        }
         s_dbgf++;
     }
     display_show(disp);
