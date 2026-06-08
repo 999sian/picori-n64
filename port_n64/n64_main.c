@@ -317,7 +317,10 @@ void Port_N64_VBlank(void) {
          * blit, 240x160 centered into the N64 320x240 framebuffer. */
         virtuappu_registers.frame_width = 240;
         { unsigned dc = *(volatile unsigned short*)(gIoMem + 0x00);
-          virtuappu_registers.mode = ((dc & 7u) == 1u || (dc & 7u) == 2u) ? 2 : 1; }
+          /* GBA mode 1 (title: text BG0/1 logo+sword + affine BG2 forest) must map
+           * to ViruaPPU mode 1 (2 text + 1 affine), NOT mode 2 (affine-only, which
+           * drops the logo/sword text layers). Only GBA mode 2 is affine-only. */
+          virtuappu_registers.mode = ((dc & 7u) == 2u) ? 2 : 1; }
         virtuappu_render_frame();
         uint64_t _t1 = get_ticks_us();
         graphics_fill_screen(disp, 0);

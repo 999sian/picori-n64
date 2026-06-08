@@ -1,8 +1,41 @@
 diff --git a/include/entity.h b/include/entity.h
-index 887757c9..30e4c6b6 100644
+index 887757c9..ba762835 100644
 --- a/include/entity.h
 +++ b/include/entity.h
-@@ -224,8 +224,14 @@ typedef struct Entity_ {
+@@ -208,30 +208,59 @@ typedef struct Entity_ {
+     /*0x16*/ u8 carryFlags;     /**< Flags for carrying this Entity. */
+     /*0x17*/ u8 followerFlag;   /**< Controls collisions between followers, unused. */
+     /*0x18*/ struct PACKED SpriteSettings {
++    /* #N64 BE: reversed field order so draw stays bits 0-1 (raw & 3) as on LE/GBA. */
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    /*    */     u8 flipY       : 1; /* 0x80 */
++    /*    */     u8 flipX       : 1; /* 0x40 */
++    /*    */     u8 shadow      : 2; /* 0x10-0x20 */
++    /*    */     u8 ss3         : 1; /*   8 */
++    /*    */     u8 ss2         : 1; /*   4 */
++    /*    */     u8 draw        : 2; /* 0x2 */
++#else
+     /*    */     u8 draw        : 2; /**< Draw type. 0 = disabled, 1 = clip to screen, 3 = draw always */ /* 0x2 */ 
+     /*    */     u8 ss2         : 1; /*   4 */
+     /*    */     u8 ss3         : 1; /*   8 */
+     /*    */     u8 shadow      : 2; /* 0x10-0x20 */
+     /*    */     u8 flipX       : 1; /**< Flip sprite horizontally. */ /* 0x40 */ 
+     /*    */     u8 flipY       : 1; /**< Flip sprite vertically. */ /* 0x80 */ 
++#endif
+     /*    */ } spriteSettings;
+     /*0x19*/ struct PACKED SpriteRendering {
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    /*    */     u8 b3         : 2; /* 0x40 */
++    /*    */     u8 b2         : 2; /* 0x10 */
++    /*    */     u8 alphaBlend : 2; /* 4-8 */
++    /*    */     u8 b0         : 2; /* 1-2 */
++#else
+     /*    */     u8 b0         : 2; /* 1-2 */
+     /*    */     u8 alphaBlend : 2; /* 4-8 */
+     /*    */     u8 b2         : 2; /* 0x10 */
+     /*    */     u8 b3         : 2; /* 0x40 */
++#endif
+     /*    */ } spriteRendering;
      /*0x1a*/ union PACKED Palette {
      /*    */    u8 raw;
      /*    */    struct PACKED PaletteB {
@@ -17,6 +50,18 @@ index 887757c9..30e4c6b6 100644
      /*    */    } b;
      /*    */ } palette;
      /*0x1b*/ struct PACKED SpriteOrientation {
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    /*    */     u8 flipY : 2; /* 0x20-0x40 */
++    /*    */     u8 b1    : 5; /* 0x2-0x10 */
++    /*    */     u8 b0    : 1; /* 1  */
++#else
+     /*    */     u8 b0    : 1; /* 1  */
+     /*    */     u8 b1    : 5; /* 0x2-0x10 */
+     /*    */     u8 flipY : 2; /* 0x20-0x40 */
++#endif
+     /*    */ } spriteOrientation;
+     /*0x1c*/ u8 gustJarFlags; /**< Controls sfx and other things */
+     /*0x1d*/ u8 gustJarTolerance; /**< Frames needed to pull off ground. */
 diff --git a/include/gba/types.h b/include/gba/types.h
 index 38540405..c0150f45 100644
 --- a/include/gba/types.h
@@ -134,6 +179,76 @@ index 3b9ab661..066ae9b4 100644
  
  bool Port_Audio_Init(void);
  void Port_Audio_Shutdown(void);
+diff --git a/port/port_draw.c b/port/port_draw.c
+index 2f3b0df3..1a524262 100644
+--- a/port/port_draw.c
++++ b/port/port_draw.c
+@@ -54,6 +54,16 @@ static inline u32 ReadU32Unaligned(const void* p) {
+     return v;
+ }
+ 
++#ifdef TMC_N64
++/* gFrameObjLists is a flat blob of little-endian u32 self-relative offsets
++ * (GBA ROM byte order). The frame *data* it points at is read byte-wise, so the
++ * blob must stay in LE byte order — only the u32 offset reads need LE decode. */
++static inline u32 ReadU32LE(const void* p) {
++    const u8* b = (const u8*)p;
++    return (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24);
++}
++#endif
++
+ /* ---- Struct layout diagnostic (one-time) ---- */
+ static void Port_CheckStructLayouts(void) {
+     static int done = 0;
+@@ -302,7 +312,11 @@ static const u8* LookupFrameData(u16 spriteIndex, u8 frameIndex) {
+         return NULL;
+     }
+ 
++#ifdef TMC_N64
++    u32 off1 = ReadU32LE(base + (size_t)spriteIndex * sizeof(u32));
++#else
+     u32 off1 = gFrameObjLists[spriteIndex];
++#endif
+     if ((size_t)off1 > frameObjSize - sizeof(u32)) {
+         return NULL;
+     }
+@@ -312,7 +326,11 @@ static const u8* LookupFrameData(u16 spriteIndex, u8 frameIndex) {
+         return NULL;
+     }
+ 
++#ifdef TMC_N64
++    u32 off2 = ReadU32LE(base + frameEntry);
++#else
+     u32 off2 = ReadU32Unaligned(base + frameEntry);
++#endif
+     if ((size_t)off2 >= frameObjSize) {
+         return NULL;
+     }
+@@ -437,13 +455,23 @@ static void RenderSpritePieces(const u8* data, /* pointer to frame data (count b
+          *   bits 25-29: attr1.matrixNum/flip (from 'flags')
+          *   bits 30-31: attr1.size
+          */
++#ifdef TMC_N64
++        /* #N64 BE: ViruaPPU reads each OAM attr as a native u16 (cf. the attr2
++         * store below + the viruappu-n64 patch). The combined-u32 memcpy lands
++         * attr1 where attr0 belongs on big-endian (X/Y swap -> sprites collapse
++         * to a vertical strip), so pack attr0/attr1 as separate native u16s. */
++        u16 _attr0 = (u16)((u32)(y & 0xFF) | (flags & 0xFFFFu) | ((u32)(shapeInfo & 0xC0) << 8));
++        u16 _attr1 = (u16)(((u32)(x & 0x1FF) | (flags >> 16)) ^ ((u32)(shapeInfo & 0x3C) << 10));
++        memcpy(ip + 0, &_attr0, sizeof(_attr0));
++        memcpy(ip + 2, &_attr1, sizeof(_attr1));
++#else
+         u32 oamWord = (u32)(y & 0xFF);            /* y position */
+         oamWord |= (u32)((x & 0x1FF)) << 16;      /* x position */
+         oamWord |= flags;                         /* base flags */
+         oamWord |= (u32)(shapeInfo & 0xC0) << 8;  /* shape → attr0 bits 14-15 */
+         oamWord ^= (u32)(shapeInfo & 0x3C) << 26; /* flip/size → attr1 bits 12-15 */
+-
+         memcpy(ip, &oamWord, sizeof(oamWord));
++#endif
+         ip += 4;
+ 
+         /* Build attr2: tile number + priority + palette */
 diff --git a/port/port_gameplay_stubs.c b/port/port_gameplay_stubs.c
 index 1f2ad7b9..eae73595 100644
 --- a/port/port_gameplay_stubs.c
@@ -187,7 +302,7 @@ index fb8ee35b..b00f5b1a 100644
  
  /*
 diff --git a/port/port_rom.c b/port/port_rom.c
-index e22c0803..7bf37a52 100644
+index e22c0803..bacf68ef 100644
 --- a/port/port_rom.c
 +++ b/port/port_rom.c
 @@ -15,7 +15,9 @@
@@ -381,7 +496,26 @@ index e22c0803..7bf37a52 100644
      /* gPalette_549 — Mt Crenel weather-change reads a 26-palette contiguous
       * block starting here. Copy it out of gGlobalGfxAndPalettes (offset 0x44A0
       * — same relative position on USA and EU because the palette ordering in
-@@ -1171,7 +1241,11 @@ void Port_LoadRom(const char* path) {
+@@ -1089,7 +1159,18 @@ void Port_LoadRom(const char* path) {
+     /* OBJ palette offset table — now compile-time const from src/data/objPalettes.c */
+ 
+     /* gFixedTypeGfxData — from compile-time const data */
++#ifdef TMC_N64
++    /* ROM stores these as little-endian u32 (count<<24 | tile-src offset). The
++     * array is read natively (gFixedTypeGfxData[i]), so on big-endian N64 each
++     * word must be LE-decoded or count comes out garbage and LoadFixedGFX fails. */
++    for (u32 _fi = 0; _fi < R->fixedTypeGfxCount; _fi++) {
++        const u8* _fb = &kFixedTypeGfxInitData[_fi * 4];
++        gFixedTypeGfxData[_fi] =
++            (u32)_fb[0] | ((u32)_fb[1] << 8) | ((u32)_fb[2] << 16) | ((u32)_fb[3] << 24);
++    }
++#else
+     memcpy(gFixedTypeGfxData, kFixedTypeGfxInitData, R->fixedTypeGfxCount * 4);
++#endif
+     fprintf(stderr, "gFixedTypeGfxData loaded (%u entries from compile-time table).\n", R->fixedTypeGfxCount);
+ 
+     /* gSpritePtrs — resolved from compile-time offset table, then
+@@ -1171,7 +1252,11 @@ void Port_LoadRom(const char* path) {
                  u32 resolvedCount = 0;
                  for (u32 i = 0; i < SPRITE_ANIM_322_COUNT; i++) {
                      u32 gbaPtr;
@@ -393,7 +527,7 @@ index e22c0803..7bf37a52 100644
                      if (gbaPtr == 0) {
                          break;
                      }
-@@ -1257,7 +1331,12 @@ void Port_LoadRom(const char* path) {
+@@ -1257,7 +1342,12 @@ void Port_LoadRom(const char* path) {
          u32 mapDataSize = gRomSize - R->mapDataBase;
          if (mapDataSize > 0xE00000u)
              mapDataSize = 0xE00000u;
@@ -459,6 +593,41 @@ index 61cff0c0..0cc349d4 100644
                  if ((field_size & MAP_COMPRESSED) != 0) {
                      if ((field_dest_gba >> 0x18) == 6) {
                          LZ77UnCompVram(src, dest);
+diff --git a/src/entity.c b/src/entity.c
+index 53e16694..6d50cbf9 100644
+--- a/src/entity.c
++++ b/src/entity.c
+@@ -673,16 +673,27 @@ void ClearAllDeletedEntities(void) {
+ #ifdef PC_PORT
+     /* On PC, gPlayerEntity/gAuxPlayerEntities/gEntities are separate globals. */
+     int i;
+-    if ((intptr_t)gPlayerEntity.base.prev < 0)
++    /* #N64: every KSEG0 pointer is 0x8xxxxxxx, i.e. negative as intptr_t, so the
++     * GBA/PC "deleted = prev<0" proxy flags *every live entity* as deleted and
++     * ClearDeletedEntity zeroes the whole pool each frame (title objects, Link,
++     * everything). Test the actual deletion sentinel (prev == (Entity*)-1) on N64.
++     * The PC build keeps the original `< 0` form verbatim (byte-identical). */
++#ifdef TMC_N64
++#define ENT_DELETED_PREV(p) ((uintptr_t)(void*)(p) == (uintptr_t)(intptr_t)-1)
++#else
++#define ENT_DELETED_PREV(p) ((intptr_t)(p) < 0)
++#endif
++    if (ENT_DELETED_PREV(gPlayerEntity.base.prev))
+         ClearDeletedEntity(&gPlayerEntity.base);
+     for (i = 0; i < MAX_AUX_PLAYER_ENTITIES; i++) {
+-        if ((intptr_t)gAuxPlayerEntities[i].base.prev < 0)
++        if (ENT_DELETED_PREV(gAuxPlayerEntities[i].base.prev))
+             ClearDeletedEntity(&gAuxPlayerEntities[i].base);
+     }
+     for (i = 0; i < MAX_ENTITIES; i++) {
+-        if ((intptr_t)gEntities[i].base.prev < 0)
++        if (ENT_DELETED_PREV(gEntities[i].base.prev))
+             ClearDeletedEntity(&gEntities[i].base);
+     }
++#undef ENT_DELETED_PREV
+ #else
+     GenericEntity* ent = (GenericEntity*)&gPlayerEntity.base;
+     do {
 diff --git a/src/fade.c b/src/fade.c
 index b67ca34c..ad83a45d 100644
 --- a/src/fade.c
@@ -587,7 +756,7 @@ index f546ec3b..4c276982 100644
      gCurrentRoomProperties = properties;
      for (i = 0; i < 8; ++i) {
 diff --git a/src/title.c b/src/title.c
-index f7b7813b..b5d8014b 100644
+index f7b7813b..0d447183 100644
 --- a/src/title.c
 +++ b/src/title.c
 @@ -79,7 +79,7 @@ static const u16 sLightRaysAlphaBlends[] = {
@@ -618,22 +787,7 @@ index f7b7813b..b5d8014b 100644
      },
  };
  static const u8 unk[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0,
-@@ -342,6 +347,14 @@ static void HandleTitlescreen(void) {
-         gIntroState.language = gSaveHeader->language;
-         LoadGfxGroup(3);
-     }
-+#ifdef TMC_N64
-+    { static unsigned _tc = 0;
-+      if ((_tc++ & 63u) == 0u)
-+          fprintf(stderr, "[title] state=%d sub=%d scale=%x lang=%d/%d\n",
-+                  (int)gIntroState.state, (int)gIntroState.subState,
-+                  (unsigned)gIntroState.swordBgScaleRatio,
-+                  (int)gIntroState.language, (int)gSaveHeader->language); }
-+#endif
-     UpdateLightRays();
-     UpdateEntities();
-     DrawEntities();
-@@ -463,7 +476,7 @@ static void HandleTitlescreenAnimationIntro(void) {
+@@ -463,7 +468,7 @@ static void HandleTitlescreenAnimationIntro(void) {
  }
  static void ExitTitlescreen(void) {
      if (!gFadeControl.active) {
@@ -642,7 +796,7 @@ index f7b7813b..b5d8014b 100644
          MemCopy(&gDemoSave, &gSave, sizeof(gSave));
          SetTask(TASK_GAME);
  #else
-@@ -472,6 +485,16 @@ static void ExitTitlescreen(void) {
+@@ -472,6 +477,16 @@ static void ExitTitlescreen(void) {
      }
  }
  
