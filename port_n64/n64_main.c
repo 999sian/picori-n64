@@ -384,6 +384,7 @@ void Port_N64_VBlank(void) {
             unsigned h1 = *(volatile unsigned short*)(gIoMem + 0x14);   /* BG1HOFS (room layer) */
             unsigned v1 = *(volatile unsigned short*)(gIoMem + 0x16);
             unsigned h2 = *(volatile unsigned short*)(gIoMem + 0x18);   /* BG2HOFS */
+            unsigned v2 = *(volatile unsigned short*)(gIoMem + 0x1a);
             extern unsigned short gInput[];   /* [0]=heldKeys [1]=newKeys */
             unsigned keyin = *(volatile unsigned short*)(gIoMem + 0x130);
             int nobj = 0, naff = 0, n8 = 0;
@@ -393,8 +394,8 @@ void Port_N64_VBlank(void) {
                 if (!aff && ((a0 >> 9) & 1)) continue;   /* hidden */
                 nobj++; if (aff) naff++; if ((a0 >> 13) & 1) n8++;
             }
-            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x obj=%d aff=%d 8bpp=%d KEYIN=%03x rus=%lu\n",
-                   s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, nobj, naff, n8,
+            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x bg1=%u,%u bg2=%u,%u obj=%d aff=%d 8bpp=%d KEYIN=%03x rus=%lu\n",
+                   s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, h1, v1, h2, v2, nobj, naff, n8,
                    keyin, (unsigned long)s_render_us);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */

@@ -320,8 +320,30 @@ index fb8ee35b..b00f5b1a 100644
  }
  
  /*
+diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
+index 1c42e0a5..cb553ad8 100644
+--- a/port/port_linked_stubs.c
++++ b/port/port_linked_stubs.c
+@@ -30,6 +30,7 @@
+ 
+ #include "port_entity_ctx.h"
+ #include "port_gba_mem.h"
++#include "port_rom.h"
+ #include "port_runtime_config.h"
+ #include "port_widescreen.h"
+ 
+@@ -510,8 +511,7 @@ static u32 TileCollisionLookup(u32 px, u32 py, Entity* entity) {
+     }
+ 
+     u8 idx = sActiveCollisionParams[tileType - 0x10];
+-    u32 gbaAddr;
+-    memcpy(&gbaAddr, &gUnk_0800823C[(u32)idx << 2], sizeof(gbaAddr));
++    u32 gbaAddr = Port_ReadU32(&gUnk_0800823C[(u32)idx << 2]);
+     const u16* table = (const u16*)port_resolve_addr((uintptr_t)gbaAddr);
+     if (table == NULL) {
+         return 0;
 diff --git a/port/port_rom.c b/port/port_rom.c
-index e22c0803..bacf68ef 100644
+index e22c0803..d5935f2c 100644
 --- a/port/port_rom.c
 +++ b/port/port_rom.c
 @@ -15,7 +15,9 @@
@@ -559,6 +581,63 @@ index e22c0803..bacf68ef 100644
          fprintf(stderr, "gMapData loaded (%u bytes from ROM offset 0x%X).\n", mapDataSize, R->mapDataBase);
      }
  
+@@ -1304,8 +1394,7 @@ void Port_LoadRom(const char* path) {
+         u8* _b = (u8*)(base);                                                  \
+         (out_count) = 0;                                                       \
+         for (u32 _j = 0; _j < MAX_ROOMS; _j++) {                               \
+-            u32 _v;                                                            \
+-            memcpy(&_v, _b + _j * 4, 4);                                       \
++            u32 _v = RomLE32(_b + _j * 4);                                  \
+             if (_v == 0 || (_v >= 0x08000000u && _v < 0x08000000u + gRomSize)) \
+                 (out_count) = _j + 1;                                          \
+             else                                                               \
+diff --git a/port/port_rom.h b/port/port_rom.h
+index 947cf36f..eba571d3 100644
+--- a/port/port_rom.h
++++ b/port/port_rom.h
+@@ -88,12 +88,42 @@ static inline void* Port_PackedRomEntry(const void* base, u32 idx) {
+     return Port_ResolveRomData(raw);
+ }
+ 
++#ifdef TMC_N64
++static inline int Port_N64_IsCartPtrRange(const void* data, u32 len) {
++    uintptr_t addr = (uintptr_t)data;
++    u32 phys = (u32)(addr & 0x1FFFFFFFu);
++    return phys >= 0x10000000u && phys <= (0x1FC00000u - len);
++}
++
++static inline u8 Port_N64_CartReadU8Lw(const void* data) {
++    uintptr_t addr = (uintptr_t)data;
++    u32 word = *(const volatile u32*)(addr & ~(uintptr_t)3u);
++    return (u8)(word >> (8u * (3u - (u32)(addr & 3u))));
++}
++#endif
++
+ static inline u16 Port_ReadU16(const void* data) {
++#ifdef TMC_N64
++    if (Port_N64_IsCartPtrRange(data, 2)) {
++        const u8* raw = (const u8*)data;
++        return (u16)Port_N64_CartReadU8Lw(raw) | ((u16)Port_N64_CartReadU8Lw(raw + 1) << 8);
++    }
++#endif
+     const u8* raw = (const u8*)data;
+     return (u16)(raw[0] | (raw[1] << 8));
+ }
+ 
+ static inline u32 Port_ReadU32(const void* data) {
++#ifdef TMC_N64
++    if (Port_N64_IsCartPtrRange(data, 4)) {
++        uintptr_t addr = (uintptr_t)data;
++        if ((addr & 3u) == 0)
++            return __builtin_bswap32(*(const volatile u32*)addr);
++        const u8* raw = (const u8*)data;
++        return (u32)Port_N64_CartReadU8Lw(raw) | ((u32)Port_N64_CartReadU8Lw(raw + 1) << 8) |
++               ((u32)Port_N64_CartReadU8Lw(raw + 2) << 16) | ((u32)Port_N64_CartReadU8Lw(raw + 3) << 24);
++    }
++#endif
+     const u8* raw = (const u8*)data;
+     return (u32)raw[0] | ((u32)raw[1] << 8) | ((u32)raw[2] << 16) | ((u32)raw[3] << 24);
+ }
 diff --git a/port/port_types.h b/port/port_types.h
 index ba38afbd..328632ca 100644
 --- a/port/port_types.h
@@ -696,43 +775,86 @@ index b67ca34c..ad83a45d 100644
          u16 col = srcPtr[i];
          u32 shifted = (u32)col << 1;
 diff --git a/src/gameUtils.c b/src/gameUtils.c
-index 215c24f8..1a6437ee 100644
+index 215c24f8..57cf0227 100644
 --- a/src/gameUtils.c
 +++ b/src/gameUtils.c
-@@ -699,6 +699,15 @@ void InitAllRoomResInfo(void) {
+@@ -116,6 +116,19 @@ static void* ReadAreaSubTableEntry(void** table, u32 index) {
+     return table[index];
+ }
+ #endif
++#ifdef TMC_N64
++static RoomHeader N64_ReadRoomHeader(const RoomHeader* hdr) {
++    const u8* raw = (const u8*)hdr;
++    RoomHeader out;
++    out.map_x = Port_ReadU16(raw + 0);
++    out.map_y = Port_ReadU16(raw + 2);
++    out.pixel_width = Port_ReadU16(raw + 4);
++    out.pixel_height = Port_ReadU16(raw + 6);
++    out.tileSet_id = Port_ReadU16(raw + 8);
++    return out;
++}
++#endif
++
+ 
+ void SetPopupState(u32 type, u32 choice_idx) {
+     static const Font sDefaultFont = {
+@@ -688,17 +701,29 @@ void InitAllRoomResInfo(void) {
+             break;
+         }
+ #endif
++#ifdef TMC_N64
++        if (Port_ReadU16((const u8*)r_hdr) == 0xFFFF) {
++            break;
++        }
++        if (Port_ReadU16((const u8*)r_hdr + 8) != 0xFFFF)
++            InitRoomResInfo(info, r_hdr, gRoomControls.area, i);
++#else
+         if (*(u16*)r_hdr == 0xFFFF) {
+             break;
+         }
+         if (r_hdr->tileSet_id != 0xFFFF)
+             InitRoomResInfo(info, r_hdr, gRoomControls.area, i);
++#endif
+         info++;
+     }
+     gArea.pCurrentRoomInfo = GetCurrentRoomInfo();
  }
  
  void InitRoomResInfo(RoomResInfo* info, RoomHeader* r_hdr, u32 area, u32 room) {
 +#ifdef TMC_N64
-+    RoomHeader n64hdr = *r_hdr;   /* #N64: swap LE ROM u16 fields (else wrong tileSet_id -> black room) */
-+    n64hdr.map_x        = __builtin_bswap16(n64hdr.map_x);
-+    n64hdr.map_y        = __builtin_bswap16(n64hdr.map_y);
-+    n64hdr.pixel_width  = __builtin_bswap16(n64hdr.pixel_width);
-+    n64hdr.pixel_height = __builtin_bswap16(n64hdr.pixel_height);
-+    n64hdr.tileSet_id   = __builtin_bswap16(n64hdr.tileSet_id);
++    RoomHeader n64hdr = N64_ReadRoomHeader(r_hdr);   /* #N64: RoomHeader lives in LE cart ROM; use cart-safe lw reads. */
 +    r_hdr = &n64hdr;
 +#endif
      info->map_x = r_hdr->map_x;
      info->map_y = r_hdr->map_y;
      info->pixel_width = r_hdr->pixel_width;
-@@ -821,6 +830,17 @@ void sub_08052FF4(u32 area, u32 room) {
+@@ -821,6 +846,12 @@ void sub_08052FF4(u32 area, u32 room) {
  #endif
          return;
      }
 +#ifdef TMC_N64
-+    /* #N64: RoomHeader is little-endian ROM data; its u16 fields read byte-swapped on the
-+     * big-endian N64 — a wrong tileSet_id loads no room tiles (black room). Swap a local copy. */
-+    RoomHeader n64hdr = *r_hdr;
-+    n64hdr.map_x        = __builtin_bswap16(n64hdr.map_x);
-+    n64hdr.map_y        = __builtin_bswap16(n64hdr.map_y);
-+    n64hdr.pixel_width  = __builtin_bswap16(n64hdr.pixel_width);
-+    n64hdr.pixel_height = __builtin_bswap16(n64hdr.pixel_height);
-+    n64hdr.tileSet_id   = __builtin_bswap16(n64hdr.tileSet_id);
++    /* #N64: RoomHeader lives in little-endian cart ROM; use cart-safe lw reads
++     * before copying fields into the native RoomResInfo. */
++    RoomHeader n64hdr = N64_ReadRoomHeader(r_hdr);
 +    r_hdr = &n64hdr;
 +#endif
  
      gArea.currentRoomInfo.map_x = r_hdr->map_x;
      gArea.currentRoomInfo.map_y = r_hdr->map_y;
+diff --git a/src/playerUtils.c b/src/playerUtils.c
+index c58e098f..1f4ce92d 100644
+--- a/src/playerUtils.c
++++ b/src/playerUtils.c
+@@ -2975,8 +2975,7 @@ void sub_0807A750(u32 param_1, u32 param_2, const u8* param_3, u32 param_4) {
+         }
+ #ifdef PC_PORT
+         {
+-            u32 gbaAddr;
+-            memcpy(&gbaAddr, &gUnk_0800823C[uVar2 * 4], sizeof(gbaAddr));
++            u32 gbaAddr = Port_ReadU32(&gUnk_0800823C[uVar2 * 4]);
+             ptr = (const u16*)port_resolve_addr((uintptr_t)gbaAddr);
+         }
+ #else
 diff --git a/src/room.c b/src/room.c
 index f546ec3b..b0768c9e 100644
 --- a/src/room.c

@@ -25,6 +25,21 @@
 extern void dma_read(void* ram_address, unsigned long pi_address, unsigned long len);
 extern void data_cache_hit_writeback_invalidate(volatile void* addr, unsigned long length);
 static u8 sLz77DmaBuf[0x18000] __attribute__((aligned(16))); /* 96KB cart->RDRAM stage */
+static inline u8 n64_cart_read_u8_lw(const void* data) {
+    uintptr_t addr = (uintptr_t)data;
+    uint32_t word = *(const volatile uint32_t*)(addr & ~(uintptr_t)3u);
+    return (uint8_t)(word >> (8u * (3u - (uint32_t)(addr & 3u))));
+}
+
+static inline u32 n64_lz77_header_size(const u8* s) {
+    uint32_t phys = (uint32_t)((uintptr_t)s & 0x1FFFFFFFu);
+    if (phys >= 0x10000000u && phys < 0x1FC00000u) {
+        return (u32)n64_cart_read_u8_lw(s + 1) | ((u32)n64_cart_read_u8_lw(s + 2) << 8) |
+               ((u32)n64_cart_read_u8_lw(s + 3) << 16);
+    }
+    return (u32)s[1] | ((u32)s[2] << 8) | ((u32)s[3] << 16);
+}
+
 #endif
 
 /* src/main.c (under PC_PORT) arms a soft-reset longjmp target defined in
@@ -122,7 +137,7 @@ static void Lz77Decompress(const void* src, void* dest) {
     {
         uint32_t phys = (uint32_t)((uintptr_t)src & 0x1FFFFFFFu);
         if (phys >= 0x10000000u && phys < 0x1FC00000u) {
-            u32 dsz  = (u32)s[1] | ((u32)s[2] << 8) | ((u32)s[3] << 16); /* decompressed size */
+            u32 dsz  = n64_lz77_header_size(s); /* decompressed size */
             u32 need = 4u + dsz + (dsz >> 3) + 32u;  /* header + worst-case LZ77 + pad */
             if (need <= sizeof sLz77DmaBuf) {
                 need = (need + 15u) & ~15u;
@@ -134,7 +149,7 @@ static void Lz77Decompress(const void* src, void* dest) {
     }
 #endif
     u8* d = (u8*)dest;
-    u32 size = (u32)s[1] | ((u32)s[2] << 8) | ((u32)s[3] << 16);
+    u32 size = n64_lz77_header_size(s);
     s += 4;
     u32 done = 0;
     while (done < size) {
@@ -214,21 +229,21 @@ int Port_IsRoomHeaderPtrReadable(const void* ptr) {
     return (p >= gRomData && p + 0xA <= gRomData + gRomSize) ? 1 : 0;
 }
 int Port_IsLoadedAssetBytes(const void* p, u32 n) { (void)p; (void)n; return 0; }
-int  Port_LoadPaletteGroupFromAssets(u32 a) { (void)a; return 0; }
-int  Port_LoadGfxGroupFromAssets(u32 a) { (void)a; return 0; }
-void Port_LogTextLookup(u32 a) { (void)a; }
+int Port_LoadPaletteGroupFromAssets(u32 a) { (void)a; return 0; }
+int Port_LoadGfxGroupFromAssets(u32 a) { (void)a; return 0; }
+void Port_LogTextLookup(u32 lang, u32 text) { (void)lang; (void)text; }
 void Port_DumpAssetEnvironment(void) {}
 /* Asset-pipeline predicates referenced by port_rom.c (real impls in the
  * excluded port_asset_loader.cpp). Return "not from assets" so port_rom.c
  * resolves from the ROM instead. */
-int  Port_AreSpritePtrsLoadedFromAssets(void) { return 0; }
-int  Port_IsAreaTablePtrFromAssets(u32 addr) { (void)addr; return 0; }
-void Port_RefreshAreaDataFromAssets(void) {}
+int Port_AreSpritePtrsLoadedFromAssets(void) { return 0; }
+int Port_IsAreaTablePtrFromAssets(u32 area, const void* ptr) { (void)area; (void)ptr; return 0; }
+int Port_RefreshAreaDataFromAssets(u32 area) { (void)area; return 0; }
 /* Asset-pipeline loaders/status referenced by port_rom.c (real impls in the
  * excluded port_asset_loader.cpp). No-ops on N64 — data comes from the ROM. */
-void Port_LoadAreaTablesFromAssets(void) {}
-void Port_LoadSpritePtrsFromAssets(void) {}
-void Port_LoadTextsFromAssets(void) {}
+int Port_LoadAreaTablesFromAssets(void) { return 0; }
+int Port_LoadSpritePtrsFromAssets(void) { return 0; }
+int Port_LoadTextsFromAssets(void) { return 0; }
 void Port_LogAssetLoaderStatus(void) {}
 
 /* ===== 3. Subsystem stubs (real N64 impls in later phases) ============= */
