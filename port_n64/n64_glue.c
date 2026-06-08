@@ -14,6 +14,7 @@
 #include "gba/syscall.h"
 #include "gba/eeprom.h"
 #include "port_gba_mem.h"   /* port_resolve_addr: GBA addr -> gVram/gEwram/... */
+#include "port_m4a_backend.h" /* canonical Port_M4A_Backend_* signatures */
 #include <string.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -307,14 +308,27 @@ u16 EEPROMWrite0_8k_Check(u16 address, const u16* data) {
     return (sram_write(data, offset, 8) == 8) ? 0 : EEPROM_OUT_OF_RANGE;
 }
 
-/* Audio backend (→ N64 AI in Phase 5) */
-void Port_M4A_Backend_SoundInit(void) {}
-void Port_M4A_Backend_StartSongById(u32 id) { (void)id; }
-void Port_M4A_Backend_StopPlayer(void) {}
-void Port_M4A_Backend_ContinuePlayer(void) {}
-int  Port_M4A_Backend_IsPlayerActive(void) { return 0; }
-void Port_M4A_Backend_SetVSyncEnabled(int e) { (void)e; }
-void Port_M4A_Backend_SetTrackVolume(u32 t, u32 v) { (void)t; (void)v; }
+/* Audio backend (N64 AI synth not yet implemented). These keep the m4a
+ * bookkeeping ABI correct — signatures match port_m4a_backend.h exactly (the
+ * include above makes that a compile-time check), so port_m4a_stubs.c no longer
+ * reads a garbage return value from StartSongById (was declared void here but
+ * called as bool, which could spuriously MPlayStop the player). With no synth,
+ * report "nothing playing": StartSongById fails (player is immediately stopped,
+ * status stays consistent and song-finished waits resolve at once → no audio
+ * hang) and IsPlayerActive is always false. */
+bool Port_M4A_Backend_Init(uint32_t sampleRate) { (void)sampleRate; return false; }
+void Port_M4A_Backend_Shutdown(void) {}
+void Port_M4A_Backend_Reset(void) {}
+void Port_M4A_Backend_SoundInit(uint32_t soundMode) { (void)soundMode; }
+void Port_M4A_Backend_SetSoundMode(uint32_t soundMode) { (void)soundMode; }
+void Port_M4A_Backend_SetVSyncEnabled(bool enabled) { (void)enabled; }
+bool Port_M4A_Backend_StartSongById(uint8_t playerIndex, uint16_t songId) { (void)playerIndex; (void)songId; return false; }
+void Port_M4A_Backend_StartSong(uint8_t playerIndex, const SongHeader* songHeader) { (void)playerIndex; (void)songHeader; }
+void Port_M4A_Backend_StopPlayer(uint8_t playerIndex) { (void)playerIndex; }
+void Port_M4A_Backend_ContinuePlayer(uint8_t playerIndex) { (void)playerIndex; }
+void Port_M4A_Backend_SetTrackVolume(uint8_t playerIndex, uint16_t trackBits, uint16_t volume) { (void)playerIndex; (void)trackBits; (void)volume; }
+void Port_M4A_Backend_SetTrackPan(uint8_t playerIndex, uint16_t trackBits, int8_t pan) { (void)playerIndex; (void)trackBits; (void)pan; }
+bool Port_M4A_Backend_IsPlayerActive(uint8_t playerIndex) { (void)playerIndex; return false; }
 
 /* Soft-slots / input (→ N64 pad in Phase 6) */
 int  Port_SoftSlots_GetEffectiveBItem(void) { return 0; }

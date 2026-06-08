@@ -8,6 +8,11 @@
 *.dfs
 baserom.dfs.libdragon
 
+# emulator-generated cartridge save sidecar (SRAM-backed save backend)
+*.ram
+*.srm
+*.sra
+
 # user-supplied ROM (copyright; not shipped) and any extracted assets
 romfs/*.gba
 romfs/*.bin
