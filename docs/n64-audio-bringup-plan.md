@@ -88,6 +88,35 @@ first init + vendor it for `mips64-elf-g++`.
 Recommendation: option 1 (parity + reuse) unless agbplay proves impractical to
 compile, then fall back to option 2 PCM-first.
 
+## Option 1 porting surface (read from agbplay_core source — definitive)
+
+`tmc/libs/agbplay_core/` is now checked out. The C++ engine to port for
+`mips64-elf-g++`:
+- **Engine:** `MP2KContext` (+ `MP2KPlayer`, `MP2KTrack`, `MP2KChn`/`MP2KChnPCM`/
+  `MP2KChnPSG`, `SequenceReader`, `SoundMixer`, `Resampler`, `ReverbEffect`,
+  `LoudnessCalculator`, `CGBPatterns`). Drive per frame with
+  `MP2KContext::m4aSoundMain()` then drain `masterAudioBuffer` into the AI service.
+- **Start:** `m4aMPlayStart(playerIndex, songHeaderRomOffset)` — caller supplies the
+  song's **ROM byte offset** (not a pointer).
+- **ROM access:** `MP2KContext` reads through agbplay `Rom` (`Rom.cpp`), which
+  assumes an in-RAM `std::span<uint8_t>` over the whole ROM. On N64 `gRomData` is
+  **uncached KSEG1 cart, 16 MB > 8 MB RDRAM** — so `Rom` must be adapted to read
+  via the cart bridge (PI-DMA song/sample regions to RDRAM on demand; bytes are
+  already correct since agbplay reads byte-wise + assembles LE itself, but the
+  per-byte cart `lbu` hazard means routing reads through aligned `lw`/DMA).
+- **Song map (NOT agbplay auto-detect):** the PC backend's
+  `port_m4a_backend.cpp::LoadSongMapLocked` builds `songHeaderOffsets[songId]` from
+  **`assets/sounds.json`** (match `Port_GetSongLabel(songId)` →
+  `startOffset + headerOffset`). N64 needs that JSON available (embed in the DFS or
+  precompute a C `songId→offset` table at build time); `SongTableInfo::POS_AUTO`
+  runtime detection is unused on this path.
+- **Render wiring:** already in place — `Port_M4A_Backend_Render` (n64_glue.c) is the
+  socket; `Port_N64_AudioService` (n64_main.c) drains it to the AI DAC.
+
+First verifiable brick (next session): compile the agbplay TUs for mips64-elf,
+stand up a `Rom` over a DMA'd song region, and dump the first decoded
+`SongHeader` for one songId (trackCount/voicegroup sane) before wiring `Render`.
+
 ## Output path (either option)
 
 - `audio_init(sampleRate, buffers)` once at boot (`n64_main.c`).
