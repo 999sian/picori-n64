@@ -40,6 +40,38 @@ This doc is the runway for that work; it is not a claim that game audio plays.
 `mixer.h` (multi-channel resampling mixer + `waveform_t` sources),
 `samplebuffer.h`. AI output is straightforward; the synth is the work.
 
+## Where the song data actually is (verified — important)
+
+The C song symbols are **zero stubs**, not real data — a synth that reads
+`gSongTable[id].header` would read zeros:
+- `tmc/src/sound.c::gSongTable[]` is a real native array of
+  `Song{ const SongHeader* header; u16 musicPlayerIndex; u16 me }`, but each
+  `header` points at a placeholder: `tmc/port/port_linked_stubs.c:349-363`
+  (`u8 bgmVaatiMotif[0x10]` …, 16 zero bytes) and `tmc/port/data_stubs_autogen.c`
+  (`const u8 sfxNone[1] = {0}`).
+- The real song/voicegroup/sample data is `.incbin` GBA assembly under
+  `tmc/data/sound/` (`sounds.s` → `sounds/*.s`), which is **not compiled** into
+  the C/N64 build at all.
+
+How the PC backend actually plays (the reference, `tmc/port/port_m4a_backend.cpp`):
+it reads songs **from the cart ROM by byte offset**, not from the C symbols.
+`SongIdToRomPosLocked(songId)` returns a ROM offset from a loaded song map; an
+agbplay `Rom` wraps `gRomData`, and `MP2KContext` (agbplay's MP2K = the full GBA
+M4A sequencer + mixer, `songTableInfo.pos = POS_AUTO` auto-detects the MP2K song
+table in the ROM) renders from there via `m4aMPlayStart(playerIndex, songPos)`.
+
+**Consequences for the N64 synth:**
+1. Read all song/voicegroup/sample data from the **cart** (`gRomData`, KSEG1),
+   using the cart-read discipline (`Port_ReadU*` / PI-DMA staging, little-endian).
+   Ignore the C `bgm*`/`sfx*` stubs entirely.
+2. Obtain a `songId → ROM offset` map (port the PC `LoadSongMap`, or auto-detect
+   the MP2K song table in `gRomData` as agbplay's `POS_AUTO` does).
+3. Implement the MP2K sequencer + mixer (this is the bulk — see options below).
+
+Note: `tmc/libs/agbplay_core/` is a submodule **directory present but not checked
+out** on N64 (`build.sh` inits only `tmc` + `tmc/libs/ViruaPPU`). Option 1 must
+first init + vendor it for `mips64-elf-g++`.
+
 ## Implementation options
 
 1. **Port agbplay_core (the PC backend) to N64.** Pros: behavioral parity with the
