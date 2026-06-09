@@ -118,61 +118,67 @@ static SampleSlot* GetSample(u32 wavOff) {
     return sl;
 }
 
-static void StartVoice(int key, int vel, unsigned prog, int trkVol, int trkPan, int lenTicks) {
+static void StartVoice(int rawKey, int keyShift, int vel, unsigned prog, int trkVol, int trkPan, int lenTicks) {
     u32 td, type, wavAddr, wavOff, freq;
     SampleSlot* s;
-    int vi, octave, sem; u64 step60;
+    int vi, octave, sem, midiKey, pitchKey, fixed; u64 step60;
     if (prog > 127u) return;
     td = sVoiceGroup + prog * 12u;
     type = cart_u8(td);
-    if (type == 0x01u || type == 0x02u) {            /* PSG square (melody voices) */
+    midiKey = rawKey;
+    if (type & 0x40u) {                          /* keysplit: sub-instrument selected by note key */
+        u32 sub = gba2off(cart_u32(td + 4));
+        u32 kmap = gba2off(cart_u32(td + 8));
+        if (sub == 0u || kmap == 0u) return;
+        td = sub + (u32)cart_u8(kmap + (u32)(rawKey & 0x7F)) * 12u;
+        type = cart_u8(td);
+        if (type & 0xC0u) return;                /* no recursive split/rhythm */
+    } else if (type == 0x80u) {                  /* rhythm/drum kit: sub-instrument per note key */
+        u32 sub = gba2off(cart_u32(td + 4));
+        if (sub == 0u) return;
+        td = sub + (u32)(rawKey & 0x7F) * 12u;
+        type = cart_u8(td);
+        if (type & 0xC0u) return;
+        midiKey = (int)cart_u8(td + 1);          /* rhythm voices play at a fixed per-drum key */
+    }
+    pitchKey = midiKey + keyShift;
+    for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
+    if (vi == MAXVOICE) return;                  /* voice steal: skip (WIP) */
+    if ((type & 0x07u) == 0x01u || (type & 0x07u) == 0x02u) {   /* PSG square */
         static const u32 dutyT[4] = { 8192u, 16384u, 32768u, 49152u };  /* 12.5/25/50/75% */
-        u64 ps;
-        for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
-        if (vi == MAXVOICE) return;
-        /* phaseStep for key 69 (440Hz) @ SR = 440*65536/SR; scale by 2^((key-69)/12). */
-        ps = 440u * 65536u / SR;
-        octave = (key - 69); sem = octave % 12; octave /= 12;
+        u64 ps = 440u * 65536u / SR;             /* key 69 = 440Hz */
+        octave = (pitchKey - 69); sem = octave % 12; octave /= 12;
         if (sem < 0) { sem += 12; octave -= 1; }
         ps = (ps * kSemi[sem]) >> 16;
         if (octave >= 0) ps <<= octave; else ps >>= (-octave);
         if (ps == 0) ps = 1;
-        sVoice[vi].active = 1;
-        sVoice[vi].psg = 1;
-        sVoice[vi].phase = 0;
-        sVoice[vi].phaseStep = (u32)ps;
-        sVoice[vi].duty = dutyT[cart_u8(td + 4) & 3u];
-        sVoice[vi].rem = lenTicks;
-        sVoice[vi].env = 0;
-        sVoice[vi].vol = (vel * trkVol) / 127;
-        sVoice[vi].pan = trkPan;
+        sVoice[vi].active = 1; sVoice[vi].psg = 1; sVoice[vi].phase = 0;
+        sVoice[vi].phaseStep = (u32)ps; sVoice[vi].duty = dutyT[cart_u8(td + 4) & 3u];
+        sVoice[vi].rem = lenTicks; sVoice[vi].env = 0;
+        sVoice[vi].vol = (vel * trkVol) / 127; sVoice[vi].pan = trkPan;
         return;
     }
-    if (type != 0x00u && type != 0x08u) return;      /* otherwise only PCM (DirectSound); wave/noise WIP */
+    if ((type & 0x07u) != 0x00u) return;         /* wave (3) / noise (4): WIP */
+    fixed = (type & 0x08u) != 0;                 /* fixed-frequency PCM */
     wavAddr = cart_u32(td + 4);
     wavOff = gba2off(wavAddr);
     if (wavOff == 0u) return;
     freq = cart_u32(wavOff + 4);
     s = GetSample(wavOff);
     if (s == 0) return;
-    for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
-    if (vi == MAXVOICE) return;                      /* voice steal: skip (WIP) */
-    sVoice[vi].psg = 0;
-    /* step = (freq/1024/SR) * 2^((key-60)/12), Q16.16.  step60 = freq*64/SR. */
+    /* step = (freq/1024/SR) * 2^((pitchKey-60)/12), Q16.16.  step60 = freq*64/SR. */
     step60 = ((u64)freq * 64u) / SR;
-    octave = (key - 60); sem = octave % 12; octave /= 12;
-    if (sem < 0) { sem += 12; octave -= 1; }
-    step60 = (step60 * kSemi[sem]) >> 16;
-    if (octave >= 0) step60 <<= octave; else step60 >>= (-octave);
+    if (!fixed) {
+        octave = (pitchKey - 60); sem = octave % 12; octave /= 12;
+        if (sem < 0) { sem += 12; octave -= 1; }
+        step60 = (step60 * kSemi[sem]) >> 16;
+        if (octave >= 0) step60 <<= octave; else step60 >>= (-octave);
+    }
     if (step60 == 0) step60 = 1;
-    sVoice[vi].active = 1;
-    sVoice[vi].s = s;
-    sVoice[vi].cur = 0;
+    sVoice[vi].active = 1; sVoice[vi].psg = 0; sVoice[vi].s = s; sVoice[vi].cur = 0;
     sVoice[vi].step = (step60 > 0x3FFFFFFFu) ? 0x3FFFFFFFu : (u32)step60;
-    sVoice[vi].rem = lenTicks;
-    sVoice[vi].env = 0;
-    sVoice[vi].vol = (vel * trkVol) / 127;
-    sVoice[vi].pan = trkPan;
+    sVoice[vi].rem = lenTicks; sVoice[vi].env = 0;
+    sVoice[vi].vol = (vel * trkVol) / 127; sVoice[vi].pan = trkPan;
 }
 
 static unsigned char CmdArgc(unsigned cmd) {
@@ -205,7 +211,7 @@ static void TrackTick(Track* t) {
                 }
             }
             if (key < 0) key = (int)t->lastKey; else t->lastKey = (unsigned)key;
-            if (len > 0) StartVoice(key + t->keyShift, vel, t->prog, (int)t->vol, t->pan, len);
+            if (len > 0) StartVoice(key, t->keyShift, vel, t->prog, (int)t->vol, t->pan, len);
         } else if (cmd >= 0xB1u) {                   /* state command */
             unsigned n = CmdArgc(cmd);
             if (cmd == 0xB2u) {                      /* GOTO: follow the loop pointer */
