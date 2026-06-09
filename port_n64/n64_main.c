@@ -107,7 +107,7 @@ int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that game
  * to prove the DAC path end-to-end (audible on HW; verifiable headlessly via
  * s_audio_buffers, which only keeps rising while the AI is actually draining
  * buffers). Both flags default OFF, so the shipped ROM is unaffected. */
-int g_n64_audio          = 0;   /* WIP PCM synth; default off (shipped ROM silent). picori_audiotest.z64 builds with this on. */
+int g_n64_audio          = 0;   /* WIP PCM+PSG synth; default off (shipped ROM silent). picori_audiotest.z64 builds with this on. */
 int g_n64_audio_selftest = 0;
 int g_n64_audio_probe = 0;   /* one-shot synth/data probes for bring-up verification */
 static unsigned long s_audio_buffers = 0;

@@ -221,11 +221,18 @@ with it on. Playback is **game-driven**: the game itself starts the title BGM vi
 `SoundReq(BGM_TITLE_SCREEN)` (`title.c:266`, the title state) — matching GBA
 timing (silent boot logos, music on the title screen). No forced start.
 
-**Still WIP (needs listening to polish):** PSG square/wave/noise voices (title
-voicegroup is 109 PSG + 17 PCM, so the PCM-only mix is missing melody lines);
-real ADSR (currently a simple ramp); per-player separation, voice-stealing, LFO/
-vibrato/pitch-bend; and confirming pitch/tempo/timbre actually *sound* right —
-the headless checks only prove "plays, correct voice/tempo counts, no crash."
+**PSG square (types 1/2) added** for melody/bass voices not carried by PCM:
+`f = 440·2^((key-69)/12)`, phase-accumulator square with the ToneData duty
+(12.5/25/50/75%), sharing the envelope/mix path. NOTE: the **title BGM is fully
+PCM** (it selects progs 27–63, all type 0), so PSG is unexercised by the title —
+it matters for other songs; it's structurally sound (mirrors the verified PCM
+path) but not yet listen-verified on a PSG-using song.
+
+**Still WIP (needs listening to polish):** PSG **wave** (type 3 programmable
+wavetable) + **noise** (type 4, percussion); real CGB/ADSR envelopes (currently a
+simple ramp); per-player separation, voice-stealing, LFO/vibrato/pitch-bend; and
+confirming pitch/tempo/timbre actually *sound* right — the headless checks only
+prove "plays, correct voice/tempo counts, no crash."
 
 ## Scope / remaining
 

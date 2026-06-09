@@ -51,9 +51,12 @@ typedef struct {
 
 typedef struct {
     int active;            /* 0 free, 1 sustaining, 2 releasing */
+    int psg;               /* 0 = PCM voice, 1 = PSG square */
     SampleSlot* s;
-    u32 cur;               /* Q16.16 sample cursor */
-    u32 step;              /* Q16.16 advance per output sample */
+    u32 cur;               /* Q16.16 sample cursor (PCM) */
+    u32 step;              /* Q16.16 advance per output sample (PCM) */
+    u32 phase, phaseStep;  /* square-wave phase accumulator (PSG, 65536 = 1 period) */
+    u32 duty;              /* square duty threshold (PSG) */
     int rem;               /* remaining ticks; <0 = tie (until expiry elsewhere) */
     int env;               /* Q8 envelope 0..256 */
     int vol;               /* combined 0..127 */
@@ -122,7 +125,30 @@ static void StartVoice(int key, int vel, unsigned prog, int trkVol, int trkPan, 
     if (prog > 127u) return;
     td = sVoiceGroup + prog * 12u;
     type = cart_u8(td);
-    if (type != 0x00u && type != 0x08u) return;      /* PCM (DirectSound) only */
+    if (type == 0x01u || type == 0x02u) {            /* PSG square (melody voices) */
+        static const u32 dutyT[4] = { 8192u, 16384u, 32768u, 49152u };  /* 12.5/25/50/75% */
+        u64 ps;
+        for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
+        if (vi == MAXVOICE) return;
+        /* phaseStep for key 69 (440Hz) @ SR = 440*65536/SR; scale by 2^((key-69)/12). */
+        ps = 440u * 65536u / SR;
+        octave = (key - 69); sem = octave % 12; octave /= 12;
+        if (sem < 0) { sem += 12; octave -= 1; }
+        ps = (ps * kSemi[sem]) >> 16;
+        if (octave >= 0) ps <<= octave; else ps >>= (-octave);
+        if (ps == 0) ps = 1;
+        sVoice[vi].active = 1;
+        sVoice[vi].psg = 1;
+        sVoice[vi].phase = 0;
+        sVoice[vi].phaseStep = (u32)ps;
+        sVoice[vi].duty = dutyT[cart_u8(td + 4) & 3u];
+        sVoice[vi].rem = lenTicks;
+        sVoice[vi].env = 0;
+        sVoice[vi].vol = (vel * trkVol) / 127;
+        sVoice[vi].pan = trkPan;
+        return;
+    }
+    if (type != 0x00u && type != 0x08u) return;      /* otherwise only PCM (DirectSound); wave/noise WIP */
     wavAddr = cart_u32(td + 4);
     wavOff = gba2off(wavAddr);
     if (wavOff == 0u) return;
@@ -131,6 +157,7 @@ static void StartVoice(int key, int vel, unsigned prog, int trkVol, int trkPan, 
     if (s == 0) return;
     for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
     if (vi == MAXVOICE) return;                      /* voice steal: skip (WIP) */
+    sVoice[vi].psg = 0;
     /* step = (freq/1024/SR) * 2^((key-60)/12), Q16.16.  step60 = freq*64/SR. */
     step60 = ((u64)freq * 64u) / SR;
     octave = (key - 60); sem = octave % 12; octave /= 12;
@@ -271,28 +298,32 @@ void Port_N64_SynthRender(int16_t* out, uint32_t frames, int mute) {
         while (sTickAcc >= sSamplesPerTick) { sTickAcc -= sSamplesPerTick; DoTick(); }
         for (i = 0; i < MAXVOICE; i++) {
             Voice* v = &sVoice[i];
-            u32 idx; int smp, e, val, l, r;
+            int smp, e, val, l, r;
             if (!v->active) continue;
-            idx = v->cur >> 16;
-            if (idx >= v->s->len) {
-                if (v->s->looped && v->s->len > v->s->loopStart) {
-                    u32 ll = v->s->len - v->s->loopStart;
-                    idx = v->s->loopStart + ((idx - v->s->loopStart) % ll);
-                    v->cur = (idx << 16) | (v->cur & 0xFFFFu);
-                } else { v->active = 0; continue; }
-            }
             /* envelope: quick attack, hold, quick release */
             if (v->active == 1) { if (v->env < 256) { v->env += 8; if (v->env > 256) v->env = 256; } }
             else { v->env -= 4; if (v->env <= 0) { v->active = 0; continue; } }
-            smp = v->s->data[idx];                /* s8 -128..127 */
+            if (v->psg) {                            /* PSG square (melody) */
+                smp = ((v->phase & 0xFFFFu) < v->duty) ? 48 : -48;
+                v->phase += v->phaseStep;
+            } else {                                 /* PCM (DirectSound) */
+                u32 idx = v->cur >> 16;
+                if (idx >= v->s->len) {
+                    if (v->s->looped && v->s->len > v->s->loopStart) {
+                        u32 ll = v->s->len - v->s->loopStart;
+                        idx = v->s->loopStart + ((idx - v->s->loopStart) % ll);
+                        v->cur = (idx << 16) | (v->cur & 0xFFFFu);
+                    } else { v->active = 0; continue; }
+                }
+                smp = v->s->data[idx];               /* s8 -128..127 */
+                v->cur += v->step;
+            }
             e = (smp * v->env) >> 8;              /* envelope */
             val = (e * v->vol) >> 7;              /* track/vel volume (0..127) */
-            /* pan: 0..127, 64 center */
-            l = (val * (127 - v->pan)) >> 7;
+            l = (val * (127 - v->pan)) >> 7;     /* pan: 0..127, 64 center */
             r = (val * v->pan) >> 7;
             accL += l << 6;                        /* s8 -> ~int16 headroom */
             accR += r << 6;
-            v->cur += v->step;
         }
         if (accL > 32767) accL = 32767; else if (accL < -32768) accL = -32768;
         if (accR > 32767) accR = 32767; else if (accR < -32768) accR = -32768;
