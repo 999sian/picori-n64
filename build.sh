@@ -119,7 +119,7 @@ PORT_REL=(
 )
 PORT_SRCS=(); for f in "${PORT_REL[@]}"; do PORT_SRCS+=("$ROOT/$f"); done
 # N64-exclusive glue lives in THIS repo, not the submodule.
-GLUE=( "$OUTER/port_n64/n64_glue.c" "$OUTER/port_n64/n64_main.c" )
+GLUE=( "$OUTER/port_n64/n64_glue.c" "$OUTER/port_n64/n64_main.c" "$OUTER/port_n64/n64_audio_songmap.c" )
 
 ALL_SRCS=( "${SRCS[@]}" "${PORT_SRCS[@]}" "${GLUE[@]}" )
 

@@ -154,9 +154,27 @@ Reuse the cross-platform numeric-parity method already proven for the framebuffe
    GBA-accurate path, so a matching song+frame should match sample-for-sample
    (option 1) or be perceptually equivalent (option 2 PCM-only).
 
-## Scope
+## Option 2 progress (landed + verified)
 
-Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as a multi-month
-item. Landed so far: the M4A bookkeeping ABI fix and the AI output service
-(verified). Remaining: the synth itself — replace `Port_M4A_Backend_Render`'s
-silence with real M4A synthesis (option 1 or 2 above).
+The **song-data locator** (the Option-2 foundation) is implemented and verified:
+- `port_n64/gen_song_offsets.py` reads `assets/sounds.json` + `port_song_midi_table.inc`
+  and emits `port_n64/n64_song_offsets.inc` — a `songId → cart ROM byte offset`
+  table (`start + headerOffset`), using the `sound.h` enum designators so the C
+  compiler resolves indices. 507 songs mapped.
+- `port_n64/n64_audio_songmap.c` provides `Port_N64_SongHeaderPtr(songId)` (resolves
+  to a cart pointer) and reads the `SongHeader` endian-correct via the cart-safe
+  `Port_ReadU32`. `Port_N64_AudioProbeSongs()` (gated `g_n64_audio_probe`, default
+  off) dumps decoded headers.
+- **Verified on ares** vs baserom ground truth: `BGM_TITLE_SCREEN` →
+  `trk=7 tone=0x089fd5fc part0=0x08dcc864` (exact match); ids 1/2 also sane.
+
+## Scope / remaining
+
+Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as multi-month.
+Landed: M4A bookkeeping ABI fix; verified AI output service; verified song-data
+locator (above). **Remaining: the MP2K sequencer + PCM mixer itself** — the next
+brick is, per song, walk `SongHeader.part[]` track command streams (cart reads)
+to drive notes against the `tone`/voicegroup `WaveData` PCM, render mixed int16
+into `Port_M4A_Backend_Render`'s buffer (already wired to the AI DAC). Use
+`tmc/libs/agbplay_core` (checked out) as the behavior reference. Verify via the
+PCM-parity method above.

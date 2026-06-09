@@ -109,6 +109,7 @@ int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that game
  * buffers). Both flags default OFF, so the shipped ROM is unaffected. */
 int g_n64_audio          = 0;
 int g_n64_audio_selftest = 0;
+int g_n64_audio_probe = 0;   /* one-shot: dump decoded SongHeaders to verify cart song-data reads */
 static unsigned long s_audio_buffers = 0;
 static int      s_audio_inited = 0;
 static unsigned s_audio_phase  = 0;
@@ -439,6 +440,10 @@ void Port_N64_VBlank(void) {
      * N64 framebuffer (uncached, after the RDP/blit) so it works for both paths. */
     {
         static unsigned s_dbgf = 0;
+        if (g_n64_audio_probe && s_dbgf == 50u) {
+            extern void Port_N64_AudioProbeSongs(void);
+            Port_N64_AudioProbeSongs();
+        }
         if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
             extern Main gMain;
             unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
