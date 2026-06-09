@@ -221,18 +221,23 @@ with it on. Playback is **game-driven**: the game itself starts the title BGM vi
 `SoundReq(BGM_TITLE_SCREEN)` (`title.c:266`, the title state) — matching GBA
 timing (silent boot logos, music on the title screen). No forced start.
 
-**PSG square (types 1/2) added** for melody/bass voices not carried by PCM:
-`f = 440·2^((key-69)/12)`, phase-accumulator square with the ToneData duty
-(12.5/25/50/75%), sharing the envelope/mix path. NOTE: the **title BGM is fully
-PCM** (it selects progs 27–63, all type 0), so PSG is unexercised by the title —
-it matters for other songs; it's structurally sound (mirrors the verified PCM
-path) but not yet listen-verified on a PSG-using song.
+**Instrument coverage (verified by analysis + ares):** TMC BGMs are almost
+entirely **PCM** (DirectSound) plus **rhythm/drum kits** (type 0x80) and
+**keysplit/multi-sample** instruments (type 0x40) — they barely use PSG. So the
+impactful additions were the split/rhythm resolvers, now implemented:
+`StartVoice` resolves `type & 0x40` (keysplit: sub-bank indexed by a per-key
+map) and `type == 0x80` (rhythm: sub-bank indexed by note key, fixed per-drum
+pitch) to the real PCM sub-instrument, then dispatches on `type & 0x07` (PCM /
+square / FIX 0x08). **Verified on ares**: song 1 (uses rhythm prog 127) went from
+dropping those notes to `pcm=7 voices, peak 8256`, no crash — drums + multi-sample
+now play. PSG **square** (types 1/2) also added (`f=440·2^((key-69)/12)`, duty
+from ToneData), though TMC songs rarely select it. KEYSH transpose applied.
 
-**Still WIP (needs listening to polish):** PSG **wave** (type 3 programmable
-wavetable) + **noise** (type 4, percussion); real CGB/ADSR envelopes (currently a
-simple ramp); per-player separation, voice-stealing, LFO/vibrato/pitch-bend; and
-confirming pitch/tempo/timbre actually *sound* right — the headless checks only
-prove "plays, correct voice/tempo counts, no crash."
+**Still WIP (needs listening to polish):** PSG **wave** (type 3) + **noise**
+(type 4) — both still skipped; real CGB/ADSR envelopes (currently a simple ramp);
+output levels / mix balance; per-player separation, voice-stealing, LFO/vibrato/
+pitch-bend; and confirming pitch/tempo/timbre actually *sound* right — the
+headless checks only prove "plays, correct voice counts, no crash."
 
 ## Scope / remaining
 
