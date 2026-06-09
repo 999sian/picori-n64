@@ -66,7 +66,7 @@ typedef struct {
 typedef struct {
     u32 pos;               /* cart ROM offset into the command stream */
     unsigned delay, lastCmd, prog, vol, lastKey;
-    int pan, enabled;
+    int pan, enabled, keyShift;
     u32 cstk[4]; int cdep; /* PATT/PEND pattern call stack */
 } Track;
 
@@ -205,7 +205,7 @@ static void TrackTick(Track* t) {
                 }
             }
             if (key < 0) key = (int)t->lastKey; else t->lastKey = (unsigned)key;
-            if (len > 0) StartVoice(key, vel, t->prog, (int)t->vol, t->pan, len);
+            if (len > 0) StartVoice(key + t->keyShift, vel, t->prog, (int)t->vol, t->pan, len);
         } else if (cmd >= 0xB1u) {                   /* state command */
             unsigned n = CmdArgc(cmd);
             if (cmd == 0xB2u) {                      /* GOTO: follow the loop pointer */
@@ -227,6 +227,7 @@ static void TrackTick(Track* t) {
             }
             if (n == 0xFFu || cmd == 0xB1u) { t->enabled = 0; return; }   /* FINE / unhandled */
             if (cmd == 0xBB) sBpm = cart_u8(t->pos) * 2u, RecalcTempo();
+            else if (cmd == 0xBC) t->keyShift = (int)(signed char)cart_u8(t->pos);   /* KEYSH transpose */
             else if (cmd == 0xBD) t->prog = cart_u8(t->pos);
             else if (cmd == 0xBE) t->vol = cart_u8(t->pos);
             else if (cmd == 0xBF) t->pan = (int)cart_u8(t->pos);
