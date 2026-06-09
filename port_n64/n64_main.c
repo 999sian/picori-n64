@@ -443,8 +443,10 @@ void Port_N64_VBlank(void) {
         if (g_n64_audio_probe && s_dbgf == 50u) {
             extern void Port_N64_AudioProbeSongs(void);
             extern void Port_N64_AudioProbeVoice(unsigned short);
+            extern void Port_N64_AudioProbeTrack(unsigned short);
             Port_N64_AudioProbeSongs();
             Port_N64_AudioProbeVoice(3 /* BGM_TITLE_SCREEN */);
+            Port_N64_AudioProbeTrack(3 /* BGM_TITLE_SCREEN */);
         }
         if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
             extern Main gMain;

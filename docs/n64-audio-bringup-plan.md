@@ -178,15 +178,28 @@ baserom. So the full `SongHeader → ToneData → WaveData` cart-read chain (the
 mixer's entire input path) is proven. (Title voicegroup is 109 PSG + 17
 DirectSound voices — a PCM-only first cut will be missing the PSG melody.)
 
+The **MP2K command-stream decoder** (the sequencer's front half) is landed and
+rigorously verified: `Port_N64_AudioProbeTrack(songId)` decodes a track's
+`part[]` command stream with the exact agbplay `SequenceReader` semantics —
+running status (`lastCmd`, repeatable `≥0xBD`), note-arg parsing (base len from
+the shared 49-entry GBA length LUT, then up to 3 optional `<0x80` bytes =
+key/vel/len-extend), waits (`0x80–0xB0`), and state commands (`0xB1–0xCE`, with
+per-command arg counts). **Verified by parity**: a Python re-implementation of
+the same loop decoded `BGM_TITLE_SCREEN` track[0] to an event list, and the N64
+decoder reproduced all 16 events **exactly** (`KEYSH=0, TEMPO=250, VOICE=62,
+VOL=48, WAIT72, TEMPO=60, …` plus running-status notes with correct variable
+arg counts). So the sequencer's parsing layer is proven; what remains is the
+*timing/dispatch* (tick countdown, tempo→samples) and the **mixer**.
+
 ## Scope / remaining
 
 Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as multi-month.
 Landed + verified: M4A bookkeeping ABI fix; AI output service; song-data locator;
-voicegroup/sample reader (the complete cart-read input path). **Remaining: the
-MP2K sequencer + mixer DSP** — per song, walk `SongHeader.part[]` track command
-streams (cart) to drive notes against the voicegroup `WaveData` PCM + PSG voices,
-with tick/tempo timing, note→pitch, ADSR, and resampling/mixing into the int16
-buffer `Port_M4A_Backend_Render` hands the AI DAC. Use `tmc/libs/agbplay_core`
+voicegroup/sample reader; MP2K command-stream decoder (sequencer parsing).
+**Remaining: the sequencer timing/dispatch + the mixer DSP** — drive decoded
+notes (tick/tempo countdown) against the voicegroup `WaveData` PCM + PSG voices,
+with note→pitch, ADSR, and resampling/mixing into the int16 buffer
+`Port_M4A_Backend_Render` hands the AI DAC. Use `tmc/libs/agbplay_core`
 (checked out) as the behavior reference. NOTE on verification: a *fresh* Option-2
 synth will NOT be PCM-sample-exact to agbplay, so headless verification is
 limited to "non-silent, no crash, plausible" — true correctness needs listening
