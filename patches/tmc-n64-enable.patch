@@ -998,6 +998,41 @@ index f546ec3b..b0768c9e 100644
  
      gCurrentRoomProperties = properties;
      for (i = 0; i < 8; ++i) {
+diff --git a/src/text.c b/src/text.c
+index df459f42..3a4d145e 100644
+--- a/src/text.c
++++ b/src/text.c
+@@ -113,16 +113,30 @@ void sub_0805EEB4(Token* token, u32 textIndex) {
+         langIndex = 3;
+     }
+     puVar2 = gTranslations[langIndex];
++#ifdef TMC_N64
++    /* #N64: gTranslations[] is little-endian cart ROM; its u32 offsets/counts must
++     * be read LE — a native big-endian deref byte-swaps them into a wild pointer. */
++    iVar3 = (s32)Port_ReadU32(&puVar2[(u8)(textIndex >> 8)]);
++    puVar2 = (u32*)((uintptr_t)puVar2 + iVar3);
++    iVar3 = (s32)Port_ReadU32(&puVar2[(u8)textIndex]);
++    uVar6 = Port_ReadU32(gTranslations[langIndex]) >> 2;
++    uVar7 = Port_ReadU32(puVar2) >> 2;
++#else
+     iVar3 = puVar2[(u8)(textIndex >> 8)];
+     puVar2 = (u32*)((uintptr_t)puVar2 + iVar3);
+     iVar3 = puVar2[(u8)textIndex];
+     uVar6 = *(gTranslations[langIndex]) >> 2;
+     uVar7 = *puVar2 >> 2;
++#endif
+     uVar4 = 0;
+     if (((token->textIndex >> 8) >= uVar6) || ((u8)token->textIndex >= uVar7)) {
+         uVar4 = 1;
+     } else {
++#ifdef TMC_N64
++        if ((char)Port_N64_CartReadU8Lw((const void*)((uintptr_t)puVar2 + iVar3)) == 0) {
++#else
+         if (*(char*)((uintptr_t)puVar2 + iVar3) == 0) {
++#endif
+             uVar4 = 2;
+         }
+     }
 diff --git a/src/title.c b/src/title.c
 index f7b7813b..52e801e7 100644
 --- a/src/title.c
