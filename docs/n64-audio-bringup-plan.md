@@ -85,8 +85,28 @@ first init + vendor it for `mips64-elf-g++`.
    surface, but reimplements sequencing (note on/off, tempo, ADSR, pitch, the
    `voicegroup`/`SongHeader` walk) — i.e. most of what option 1 already has.
 
-Recommendation: option 1 (parity + reuse) unless agbplay proves impractical to
-compile, then fall back to option 2 PCM-first.
+## Toolchain finding (verified — flips the recommendation)
+
+**Option 1 does NOT compile on the stock toolchain.** Test-compiling
+`agbplay_core/MP2KContext.cpp` with `mips64-elf-g++ -std=gnu++20` fails at
+`#include <cstdint>`: the libdragon GCC 15.2.0 install ships `libstdc++.a` but
+**no C++ standard headers**. `mips64-elf-g++ -E -v` lists only
+`lib/gcc/mips64-elf/15.2.0/include`, `…/include-fixed`, and `mips64-elf/include`
+(newlib C) — there is no `c++/` header dir, so `<cstdint>`/`<vector>`/`<span>`/
+`<memory>` are all unavailable. agbplay is heavy STL (`std::vector`, `std::span`,
+`std::unique_ptr`, `<algorithm>`, `<cmath>`), so it cannot build as-is.
+
+Two ways to unblock Option 1, both heavy: (a) rebuild the libdragon toolchain
+with hosted libstdc++ headers (`--enable-libstdcxx` + target headers) — a
+build-environment change affecting everyone; or (b) strip all STL out of agbplay
+(fixed buffers instead of vector/span/unique_ptr) — effectively a rewrite, i.e.
+Option 2 in disguise.
+
+**Revised recommendation: Option 2** — a fresh STL-free C M4A sequencer + PCM
+mixer that lives in `port_n64/` (or as a `TMC_N64` C TU), keeping the stock
+toolchain. Reuse agbplay only as a *reference* for behavior (sequencer command
+semantics, ADSR, resampling, mixing) — it is now checked out for reading. Pursue
+Option 1 only if hardware-exact parity is later deemed worth a toolchain rebuild.
 
 ## Option 1 porting surface (read from agbplay_core source — definitive)
 
