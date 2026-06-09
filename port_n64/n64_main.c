@@ -378,6 +378,14 @@ void Port_N64_VBlank(void) {
     if (b.d_down)  k &= (unsigned short)~GBA_DOWN;
     if (b.d_left)  k &= (unsigned short)~GBA_LEFT;
     if (b.d_right) k &= (unsigned short)~GBA_RIGHT;
+    {   /* analog stick -> D-pad directions (N64's primary control; ORed with the D-pad) */
+        joypad_inputs_t in = joypad_get_inputs(JOYPAD_PORT_1);
+        const int dz = 40;                       /* deadzone (stick range ~ +-85) */
+        if (in.stick_x >  dz) k &= (unsigned short)~GBA_RIGHT;
+        if (in.stick_x < -dz) k &= (unsigned short)~GBA_LEFT;
+        if (in.stick_y >  dz) k &= (unsigned short)~GBA_UP;     /* N64 stick up = +y */
+        if (in.stick_y < -dz) k &= (unsigned short)~GBA_DOWN;
+    }
     if (g_n64_autoplay) {   /* bring-up: after a few title frames, force demo-save -> TASK_GAME */
         extern Main gMain;
         extern void Port_N64_ForceGameStart(void);
