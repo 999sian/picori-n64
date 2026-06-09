@@ -51,12 +51,13 @@ typedef struct {
 
 typedef struct {
     int active;            /* 0 free, 1 sustaining, 2 releasing */
-    int psg;               /* 0 = PCM voice, 1 = PSG square */
+    int psg;               /* 0 = PCM, 1 = PSG square, 2 = PSG wave */
     SampleSlot* s;
     u32 cur;               /* Q16.16 sample cursor (PCM) */
     u32 step;              /* Q16.16 advance per output sample (PCM) */
     u32 phase, phaseStep;  /* square-wave phase accumulator (PSG, 65536 = 1 period) */
-    u32 duty;              /* square duty threshold (PSG) */
+    u32 duty;              /* square duty threshold (PSG square) */
+    u8 wavePat[16];        /* 32-nibble wavetable (PSG wave) */
     int rem;               /* remaining ticks; <0 = tie (until expiry elsewhere) */
     int env;               /* Q8 envelope 0..256 */
     int vol;               /* combined 0..127 */
@@ -144,7 +145,7 @@ static void StartVoice(int rawKey, int keyShift, int vel, unsigned prog, int trk
     pitchKey = midiKey + keyShift;
     for (vi = 0; vi < MAXVOICE; vi++) if (!sVoice[vi].active) break;
     if (vi == MAXVOICE) return;                  /* voice steal: skip (WIP) */
-    if ((type & 0x07u) == 0x01u || (type & 0x07u) == 0x02u) {   /* PSG square */
+    if ((type & 0x07u) >= 0x01u && (type & 0x07u) <= 0x03u) {   /* PSG square (1/2) or wave (3) */
         static const u32 dutyT[4] = { 8192u, 16384u, 32768u, 49152u };  /* 12.5/25/50/75% */
         u64 ps = 440u * 65536u / SR;             /* key 69 = 440Hz */
         octave = (pitchKey - 69); sem = octave % 12; octave /= 12;
@@ -152,13 +153,22 @@ static void StartVoice(int rawKey, int keyShift, int vel, unsigned prog, int trk
         ps = (ps * kSemi[sem]) >> 16;
         if (octave >= 0) ps <<= octave; else ps >>= (-octave);
         if (ps == 0) ps = 1;
-        sVoice[vi].active = 1; sVoice[vi].psg = 1; sVoice[vi].phase = 0;
-        sVoice[vi].phaseStep = (u32)ps; sVoice[vi].duty = dutyT[cart_u8(td + 4) & 3u];
+        sVoice[vi].phase = 0; sVoice[vi].phaseStep = (u32)ps;
         sVoice[vi].rem = lenTicks; sVoice[vi].env = 0;
         sVoice[vi].vol = (vel * trkVol) / 127; sVoice[vi].pan = trkPan;
+        if ((type & 0x07u) == 0x03u) {           /* wave: cache the 16-byte (32-nibble) pattern */
+            u32 wp = gba2off(cart_u32(td + 4)); int j;
+            if (wp == 0u) return;
+            for (j = 0; j < 16; j++) sVoice[vi].wavePat[j] = (u8)cart_u8(wp + (u32)j);
+            sVoice[vi].psg = 2;
+        } else {                                 /* square */
+            sVoice[vi].duty = dutyT[cart_u8(td + 4) & 3u];
+            sVoice[vi].psg = 1;
+        }
+        sVoice[vi].active = 1;
         return;
     }
-    if ((type & 0x07u) != 0x00u) return;         /* wave (3) / noise (4): WIP */
+    if ((type & 0x07u) != 0x00u) return;         /* noise (4): WIP */
     fixed = (type & 0x08u) != 0;                 /* fixed-frequency PCM */
     wavAddr = cart_u32(td + 4);
     wavOff = gba2off(wavAddr);
@@ -310,8 +320,14 @@ void Port_N64_SynthRender(int16_t* out, uint32_t frames, int mute) {
             /* envelope: quick attack, hold, quick release */
             if (v->active == 1) { if (v->env < 256) { v->env += 8; if (v->env > 256) v->env = 256; } }
             else { v->env -= 4; if (v->env <= 0) { v->active = 0; continue; } }
-            if (v->psg) {                            /* PSG square (melody) */
+            if (v->psg == 1) {                       /* PSG square */
                 smp = ((v->phase & 0xFFFFu) < v->duty) ? 48 : -48;
+                v->phase += v->phaseStep;
+            } else if (v->psg == 2) {                /* PSG wave (32-nibble table) */
+                unsigned wi = (v->phase >> 11) & 31u;            /* 65536/32 = 2048 = 1<<11 */
+                unsigned by = v->wavePat[wi >> 1];
+                int nib = (wi & 1u) ? (int)(by & 0xFu) : (int)(by >> 4);  /* high nibble first */
+                smp = (nib - 8) * 8;                  /* 4-bit unsigned -> ~s8 signed */
                 v->phase += v->phaseStep;
             } else {                                 /* PCM (DirectSound) */
                 u32 idx = v->cur >> 16;
