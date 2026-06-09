@@ -168,13 +168,27 @@ The **song-data locator** (the Option-2 foundation) is implemented and verified:
 - **Verified on ares** vs baserom ground truth: `BGM_TITLE_SCREEN` →
   `trk=7 tone=0x089fd5fc part0=0x08dcc864` (exact match); ids 1/2 also sane.
 
+The **voicegroup + sample reader** is also landed and verified:
+`Port_N64_AudioProbeVoice(songId)` walks the `ToneData[128]` voicegroup
+(`SongHeader.tone`) for the first DirectSound (PCM) voice and decodes its
+`WaveData{type,freq,loopStart,size}` — all via cart-safe reads + `GbaAddrToCart`.
+On ares for `BGM_TITLE_SCREEN`: `prog27 wav=0x08a16610
+WaveData{type=0 freq=16146432 loopStart=9629 size=16168}` — exact match to the
+baserom. So the full `SongHeader → ToneData → WaveData` cart-read chain (the
+mixer's entire input path) is proven. (Title voicegroup is 109 PSG + 17
+DirectSound voices — a PCM-only first cut will be missing the PSG melody.)
+
 ## Scope / remaining
 
 Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as multi-month.
-Landed: M4A bookkeeping ABI fix; verified AI output service; verified song-data
-locator (above). **Remaining: the MP2K sequencer + PCM mixer itself** — the next
-brick is, per song, walk `SongHeader.part[]` track command streams (cart reads)
-to drive notes against the `tone`/voicegroup `WaveData` PCM, render mixed int16
-into `Port_M4A_Backend_Render`'s buffer (already wired to the AI DAC). Use
-`tmc/libs/agbplay_core` (checked out) as the behavior reference. Verify via the
-PCM-parity method above.
+Landed + verified: M4A bookkeeping ABI fix; AI output service; song-data locator;
+voicegroup/sample reader (the complete cart-read input path). **Remaining: the
+MP2K sequencer + mixer DSP** — per song, walk `SongHeader.part[]` track command
+streams (cart) to drive notes against the voicegroup `WaveData` PCM + PSG voices,
+with tick/tempo timing, note→pitch, ADSR, and resampling/mixing into the int16
+buffer `Port_M4A_Backend_Render` hands the AI DAC. Use `tmc/libs/agbplay_core`
+(checked out) as the behavior reference. NOTE on verification: a *fresh* Option-2
+synth will NOT be PCM-sample-exact to agbplay, so headless verification is
+limited to "non-silent, no crash, plausible" — true correctness needs listening
+(or a much closer agbplay-derived port). This is the main reason the DSP core is
+a deliberate multi-session, partly-non-headless-verifiable piece.
