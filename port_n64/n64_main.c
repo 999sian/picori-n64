@@ -440,10 +440,6 @@ void Port_N64_VBlank(void) {
      * N64 framebuffer (uncached, after the RDP/blit) so it works for both paths. */
     {
         static unsigned s_dbgf = 0;
-        if (g_n64_audio_probe && s_dbgf == 50u) {
-            extern void Port_N64_SynthStart(unsigned short);
-            Port_N64_SynthStart(3 /* BGM_TITLE_SCREEN: force-start to verify synth output */);
-        }
         if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
             extern Main gMain;
             unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);

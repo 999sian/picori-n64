@@ -217,7 +217,9 @@ spt=666`** after its `TEMPO` command (matches the derived constant), all 7 track
 run to their natural `FINE`, no crash/underrun. Wired through
 `Port_M4A_Backend_StartSongById`/`Render` (n64_glue.c) → the AI service. Gated
 `g_n64_audio` (default off → shipped ROM silent); `picori_audiotest.z64` builds
-with it on + a forced title-BGM start for listen-testing.
+with it on. Playback is **game-driven**: the game itself starts the title BGM via
+`SoundReq(BGM_TITLE_SCREEN)` (`title.c:266`, the title state) — matching GBA
+timing (silent boot logos, music on the title screen). No forced start.
 
 **Still WIP (needs listening to polish):** PSG square/wave/noise voices (title
 voicegroup is 109 PSG + 17 PCM, so the PCM-only mix is missing melody lines);
