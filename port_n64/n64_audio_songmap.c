@@ -157,3 +157,58 @@ void Port_N64_AudioProbeTrack(uint16_t songId) {
         }
     }
 }
+
+/* Step a song's track[0] over MP2K ticks and dump the note ON/OFF timeline —
+ * the sequencer's back half (track-delay accumulation + per-note length expiry,
+ * matching agbplay's TrackMain/TickTrackNotes). Verified to match a Python
+ * tick-by-tick re-implementation: BGM_TITLE_SCREEN track[0] ->
+ * ON58@96 OFF58@105 ON53@120 OFF53@144 ON58@144 ... (correct durations). */
+void Port_N64_AudioStepTrack(uint16_t songId) {
+    const u8* hdr = (const u8*)Port_N64_SongHeaderPtr(songId);
+    u32 part0, pos;
+    unsigned lastCmd = 0, delay = 0, lastKey = 60u, emitted = 0, tick;
+    int akey[16]; int arem[16]; int nact = 0;
+    if (hdr == 0) { debugf("[step] id=%u no song\n", songId); return; }
+    part0 = Port_ReadU32(hdr + 8);
+    if (part0 < 0x08000000u || (part0 - 0x08000000u) >= gRomSize) { debugf("[step] bad part0\n"); return; }
+    pos = part0 - 0x08000000u;
+    for (tick = 0; tick < 400u && emitted < 16u; tick++) {
+        int i, j;
+        for (i = 0; i < nact; i++) arem[i]--;          /* TickTrackNotes: count down */
+        for (i = 0; i < nact; ) {
+            if (arem[i] <= 0) {
+                debugf("[step] t=%u OFF key=%d\n", tick, akey[i]); emitted++;
+                for (j = i; j < nact - 1; j++) { akey[j] = akey[j + 1]; arem[j] = arem[j + 1]; }
+                nact--;
+            } else i++;
+        }
+        while (delay == 0u) {                          /* process events */
+            unsigned cmd = Port_N64_CartReadU8Lw(gRomData + pos);
+            if (cmd < 0x80u) { cmd = lastCmd; if (cmd < 0x80u) return; }
+            else { pos++; if (cmd >= 0xBDu) lastCmd = cmd; }
+            if (cmd >= 0xCFu) {                          /* note */
+                int len = (int)kLenLut[cmd - 0xCFu]; int key = -1;
+                if (Port_N64_CartReadU8Lw(gRomData + pos) < 0x80u) {
+                    key = (int)Port_N64_CartReadU8Lw(gRomData + pos++);
+                    if (Port_N64_CartReadU8Lw(gRomData + pos) < 0x80u) {
+                        pos++;                            /* velocity */
+                        if (Port_N64_CartReadU8Lw(gRomData + pos) < 0x80u)
+                            len += (int)Port_N64_CartReadU8Lw(gRomData + pos++);
+                    }
+                }
+                if (key < 0) key = (int)lastKey; else lastKey = (unsigned)key;
+                if (len > 0 && nact < 16) {
+                    akey[nact] = key; arem[nact] = len; nact++;
+                    debugf("[step] t=%u ON key=%d\n", tick, key); emitted++;
+                }
+            } else if (cmd >= 0xB1u) {                   /* state command */
+                unsigned n = TrackCmdArgc(cmd);
+                if (n == 0xFFu || cmd == 0xB1u) return;  /* unhandled/FINE */
+                pos += n;
+            } else {                                     /* wait */
+                delay = kLenLut[cmd - 0x80u];
+            }
+        }
+        if (delay > 0u) delay--;
+    }
+}

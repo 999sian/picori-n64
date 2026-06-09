@@ -188,20 +188,34 @@ per-command arg counts). **Verified by parity**: a Python re-implementation of
 the same loop decoded `BGM_TITLE_SCREEN` track[0] to an event list, and the N64
 decoder reproduced all 16 events **exactly** (`KEYSH=0, TEMPO=250, VOICE=62,
 VOL=48, WAIT72, TEMPO=60, …` plus running-status notes with correct variable
-arg counts). So the sequencer's parsing layer is proven; what remains is the
-*timing/dispatch* (tick countdown, tempo→samples) and the **mixer**.
+arg counts).
+
+The **sequencer back half (timing/note-dispatch)** is also landed and verified:
+`Port_N64_AudioStepTrack(songId)` steps a track over MP2K ticks — track-delay
+accumulation + per-note length expiry (matching agbplay `TrackMain`/
+`TickTrackNotes`) — and emits the note ON/OFF timeline. **Verified by parity**: a
+Python tick-by-tick re-implementation and the N64 stepper agree exactly on
+`BGM_TITLE_SCREEN` track[0] (`ON58@96 OFF58@105 ON53@120 OFF53@144 ON58@144 …`,
+correct durations, simultaneous OFF/ON at shared ticks). So the **complete MP2K
+sequencer (parse + timing) is proven** on N64; only the audio-rate mixer remains.
 
 ## Scope / remaining
 
 Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as multi-month.
 Landed + verified: M4A bookkeeping ABI fix; AI output service; song-data locator;
-voicegroup/sample reader; MP2K command-stream decoder (sequencer parsing).
-**Remaining: the sequencer timing/dispatch + the mixer DSP** — drive decoded
-notes (tick/tempo countdown) against the voicegroup `WaveData` PCM + PSG voices,
-with note→pitch, ADSR, and resampling/mixing into the int16 buffer
-`Port_M4A_Backend_Render` hands the AI DAC. Use `tmc/libs/agbplay_core`
-(checked out) as the behavior reference. NOTE on verification: a *fresh* Option-2
-synth will NOT be PCM-sample-exact to agbplay, so headless verification is
-limited to "non-silent, no crash, plausible" — true correctness needs listening
-(or a much closer agbplay-derived port). This is the main reason the DSP core is
-a deliberate multi-session, partly-non-headless-verifiable piece.
+voicegroup/sample reader; **complete MP2K sequencer (command parse + tick
+timing/note-dispatch)**. **Remaining: the audio-rate mixer DSP only** — map the
+song tempo to samples-per-tick, and for each active note resample its voicegroup
+`WaveData` PCM at the note pitch with an ADSR envelope, mixing all voices (+ the
+PSG square/wave/noise voices) into the int16 buffer `Port_M4A_Backend_Render`
+hands the AI DAC. Use `tmc/libs/agbplay_core` (`SoundMixer`/`Resampler`/
+`MP2KChnPCM`) as the behavior reference.
+
+**Verification boundary (why the mixer is the last, user-in-the-loop step):**
+everything up to and including the sequencer was verified headlessly by exact
+parity against a Python re-implementation or baserom ground truth. The mixer is
+different — a *fresh* synth's PCM won't be sample-exact to agbplay, so headless
+checks bottom out at "non-silent, in-range, deterministic, responds to the
+verified note events." Confirming it actually *sounds right* (pitch, tempo,
+timbre) needs listening — so the mixer ships gated (`g_n64_audio`, default off)
+as an explicit WIP for on-device/emulator listen-testing.
