@@ -107,9 +107,9 @@ int g_n64_rdp_obj  = 1;   /* RDP OBJ/sprite path: ON — verifying now that game
  * to prove the DAC path end-to-end (audible on HW; verifiable headlessly via
  * s_audio_buffers, which only keeps rising while the AI is actually draining
  * buffers). Both flags default OFF, so the shipped ROM is unaffected. */
-int g_n64_audio          = 0;
+int g_n64_audio          = 0;   /* WIP PCM synth; default off (shipped ROM silent). picori_audiotest.z64 builds with this on. */
 int g_n64_audio_selftest = 0;
-int g_n64_audio_probe = 0;   /* one-shot: dump decoded SongHeaders to verify cart song-data reads */
+int g_n64_audio_probe = 0;   /* one-shot synth/data probes for bring-up verification */
 static unsigned long s_audio_buffers = 0;
 static int      s_audio_inited = 0;
 static unsigned s_audio_phase  = 0;
@@ -441,8 +441,8 @@ void Port_N64_VBlank(void) {
     {
         static unsigned s_dbgf = 0;
         if (g_n64_audio_probe && s_dbgf == 50u) {
-            extern void Port_N64_AudioStepTrack(unsigned short);
-            Port_N64_AudioStepTrack(3 /* BGM_TITLE_SCREEN */);
+            extern void Port_N64_SynthStart(unsigned short);
+            Port_N64_SynthStart(3 /* BGM_TITLE_SCREEN: force-start to verify synth output */);
         }
         if (s_dbgf < 4u || (s_dbgf & 31u) == 0u) {
             extern Main gMain;

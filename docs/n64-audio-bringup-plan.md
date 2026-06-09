@@ -199,6 +199,32 @@ Python tick-by-tick re-implementation and the N64 stepper agree exactly on
 correct durations, simultaneous OFF/ON at shared ticks). So the **complete MP2K
 sequencer (parse + timing) is proven** on N64; only the audio-rate mixer remains.
 
+## FIRST SOUND — PCM mixer landed (gated WIP)
+
+`port_n64/n64_audio_synth.c` implements the mixer: per output sample it advances
+the tick clock (`samplesPerTick = SR·2.5/bpm`), and for each active DirectSound
+voice nearest-neighbour-resamples its `WaveData` PCM (step₆₀ = `freq·64/SR`, ×
+`2^((key-60)/12)` via a Q16.16 semitone table) with a quick attack/release
+envelope, summing into the int16 AI buffer. Samples are PI-DMA'd into an RDRAM
+cache on first use (per-sample uncached cart reads would be far too slow).
+Sequencer features added for full songs: `GOTO` loop-follow, `PATT`/`PEND`
+pattern call-stack, BGM-only gating (ids 1–99 so SFX don't clobber), idempotent
+start + finished→replay.
+
+**Structurally verified on ares** (forced-start `BGM_TITLE_SCREEN`): plays the
+full song — up to 5 simultaneous voices, peak ~5300, **tempo exactly `bpm=120 /
+spt=666`** after its `TEMPO` command (matches the derived constant), all 7 tracks
+run to their natural `FINE`, no crash/underrun. Wired through
+`Port_M4A_Backend_StartSongById`/`Render` (n64_glue.c) → the AI service. Gated
+`g_n64_audio` (default off → shipped ROM silent); `picori_audiotest.z64` builds
+with it on + a forced title-BGM start for listen-testing.
+
+**Still WIP (needs listening to polish):** PSG square/wave/noise voices (title
+voicegroup is 109 PSG + 17 PCM, so the PCM-only mix is missing melody lines);
+real ADSR (currently a simple ramp); per-player separation, voice-stealing, LFO/
+vibrato/pitch-bend; and confirming pitch/tempo/timbre actually *sound* right —
+the headless checks only prove "plays, correct voice/tempo counts, no crash."
+
 ## Scope / remaining
 
 Substantial — `tmc/docs/n64-port-plan.md` classifies full audio as multi-month.

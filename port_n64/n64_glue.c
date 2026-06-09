@@ -322,16 +322,30 @@ void Port_M4A_Backend_Reset(void) {}
 void Port_M4A_Backend_SoundInit(uint32_t soundMode) { (void)soundMode; }
 void Port_M4A_Backend_SetSoundMode(uint32_t soundMode) { (void)soundMode; }
 void Port_M4A_Backend_SetVSyncEnabled(bool enabled) { (void)enabled; }
-bool Port_M4A_Backend_StartSongById(uint8_t playerIndex, uint16_t songId) { (void)playerIndex; (void)songId; return false; }
+bool Port_M4A_Backend_StartSongById(uint8_t playerIndex, uint16_t songId) {
+    extern int g_n64_audio;
+    extern void Port_N64_SynthStart(uint16_t);
+    (void)playerIndex;
+    if (g_n64_audio) { Port_N64_SynthStart(songId); return true; }  /* WIP PCM synth */
+    return false;
+}
 void Port_M4A_Backend_StartSong(uint8_t playerIndex, const SongHeader* songHeader) { (void)playerIndex; (void)songHeader; }
-void Port_M4A_Backend_StopPlayer(uint8_t playerIndex) { (void)playerIndex; }
+void Port_M4A_Backend_StopPlayer(uint8_t playerIndex) {
+    extern int g_n64_audio;
+    extern void Port_N64_SynthStop(void);
+    (void)playerIndex;
+    if (g_n64_audio) Port_N64_SynthStop();
+}
 void Port_M4A_Backend_ContinuePlayer(uint8_t playerIndex) { (void)playerIndex; }
 void Port_M4A_Backend_SetTrackVolume(uint8_t playerIndex, uint16_t trackBits, uint16_t volume) { (void)playerIndex; (void)trackBits; (void)volume; }
 void Port_M4A_Backend_SetTrackPan(uint8_t playerIndex, uint16_t trackBits, int8_t pan) { (void)playerIndex; (void)trackBits; (void)pan; }
 bool Port_M4A_Backend_IsPlayerActive(uint8_t playerIndex) { (void)playerIndex; return false; }
 void Port_M4A_Backend_Render(int16_t* outSamples, uint32_t frameCount, bool mute) {
-    (void)mute;   /* no synth yet: emit silence (stereo interleaved int16) */
-    if (outSamples) memset(outSamples, 0, (size_t)frameCount * 2u * sizeof(int16_t));
+    extern int g_n64_audio;
+    extern void Port_N64_SynthRender(int16_t*, uint32_t, int);
+    if (!outSamples) return;
+    if (g_n64_audio) { Port_N64_SynthRender(outSamples, frameCount, (int)mute); return; }
+    memset(outSamples, 0, (size_t)frameCount * 2u * sizeof(int16_t));  /* silence */
 }
 
 /* Soft-slots / input (→ N64 pad in Phase 6) */
