@@ -129,6 +129,12 @@ void CpuSet(const void* src, void* dest, u32 control) {
         const u16* s = (const u16*)src; u16* d = (u16*)dest;
         for (u32 i = 0; i < count; i++) d[i] = fixed ? s[0] : s[i];
     }
+#ifdef TMC_N64
+    {   /* N64: CpuSet can write VRAM directly -> mark char-swap cache dirty */
+        extern u32 g_vram_gen;
+        if ((const u8*)dest >= gVram && (const u8*)dest < gVram + 0x18000u) g_vram_gen++;
+    }
+#endif
 }
 
 /* GBA LZ77 (type 0x10): 4-byte header (size in bytes 1..3), then flag-byte
@@ -186,8 +192,10 @@ static const void* n64_lz77_addr(const void* p) {
 void LZ77UnCompWram(const void* src, void* dest) {
     Lz77Decompress(n64_lz77_addr(src), (void*)n64_lz77_addr(dest));
 }
+extern u32 g_vram_gen;   /* N64 char-swap cache dirty (n64_main.c) */
 void LZ77UnCompVram(const void* src, void* dest) {
     Lz77Decompress(n64_lz77_addr(src), (void*)n64_lz77_addr(dest));
+    g_vram_gen++;
 }
 
 void Port_N64_VBlank(void); /* defined in n64_main.c: pad pump + display pacing */

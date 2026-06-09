@@ -150,7 +150,7 @@ mapfile -t OBJS < <(for s in "${ALL_SRCS[@]}"; do obj_of "$s"; done)
   -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys \
   -Wl,-Tn64.ld -Wl,--gc-sections \
   -Wl,--wrap,__do_global_ctors \
-  -Wl,--wrap,memcpy -Wl,--wrap,__inspector_assertion \
+  -Wl,--wrap,memcpy -Wl,--wrap,memmove -Wl,--wrap,memset -Wl,--wrap,__inspector_assertion \
   -Wl,-Map="$OUTER/engine.map"
 "$N64_INST/bin/mips64-elf-size" "$OUTER/engine.elf"
 

@@ -22,6 +22,7 @@ extern unsigned char gVram[];
 extern unsigned short gBgPltt[];
 extern unsigned short gObjPltt[];
 extern unsigned short gOamMem[];
+extern u32 g_vram_gen;   /* bumped on gVram writes -> lazy char-swap cache (defined below) */
 
 #define KEYINPUT (*(volatile unsigned short*)(gIoMem + 0x130))
 
@@ -52,6 +53,26 @@ void* __wrap_memcpy(void* dst, const void* src, size_t n) {
         n64_cart_read(dst, phys, n);
     else
         __real_memcpy(dst, src, n);
+    if ((uint8_t*)dst < gVram + 0x18000 && (uint8_t*)dst + n > gVram)  /* VRAM written -> char cache dirty */
+        g_vram_gen++;
+    return dst;
+}
+extern void* __real_memmove(void* dst, const void* src, size_t n);
+void* __wrap_memmove(void* dst, const void* src, size_t n) {
+    uint32_t phys = (uint32_t)((uintptr_t)src & 0x1FFFFFFFu);
+    if (phys >= 0x10000000u && phys < 0x1FC00000u) /* cart src can't overlap RDRAM dst */
+        n64_cart_read(dst, phys, n);
+    else
+        __real_memmove(dst, src, n);
+    if ((uint8_t*)dst < gVram + 0x18000 && (uint8_t*)dst + n > gVram)  /* VRAM written -> cache dirty */
+        g_vram_gen++;
+    return dst;
+}
+extern void* __real_memset(void* dst, int c, size_t n);
+void* __wrap_memset(void* dst, int c, size_t n) {
+    __real_memset(dst, c, n);
+    if ((uint8_t*)dst < gVram + 0x18000 && (uint8_t*)dst + n > gVram)  /* VRAM cleared -> cache dirty */
+        g_vram_gen++;
     return dst;
 }
 
@@ -137,7 +158,35 @@ static void Port_N64_AudioService(void) {
 }
 
 static uint8_t  sCharScratch[0x8000] __attribute__((aligned(16)));
-static uint16_t sRdpTlut[256]        __attribute__((aligned(16)));
+static uint16_t sRdpTlut[256]        __attribute__((aligned(16)));  /* BG TLUT */
+static uint16_t sObjTlut[256]        __attribute__((aligned(16)));  /* OBJ TLUT (separate -> no BG/OBJ race) */
+
+/* perf probe: time spent CPU-side nibble-swapping char data vs stalled in rspq_wait */
+uint64_t g_prof_swap_us, g_prof_wait_us;
+#define PROF_SWAP(stmt) do { uint64_t _p = get_ticks_us(); stmt; g_prof_swap_us += get_ticks_us() - _p; } while (0)
+#define PROF_WAIT(stmt) do { uint64_t _p = get_ticks_us(); stmt; g_prof_wait_us += get_ticks_us() - _p; } while (0)
+
+/* Persistent nibble-swapped CI4 mirror of VRAM. The GBA->CI4 nibble swap (and its
+ * 96KB cache writeback) cost ~20ms/frame when redone every frame; instead keep a
+ * cache and re-swap only when VRAM actually changed. g_vram_gen is bumped by every
+ * gVram write path (gba_write*, __wrap_memcpy dst-VRAM, LZ77UnCompVram); the render
+ * re-swaps lazily when its cached generation is stale. */
+static uint8_t  sVramSwap[0x18000] __attribute__((aligned(16)));
+u32 g_vram_gen = 1;
+static u32 s_swap_gen = 0;
+
+static void Port_N64_RefreshCharSwap(void) {
+    if (g_vram_gen == s_swap_gen) return;        /* VRAM unchanged since last swap */
+    PROF_SWAP(
+    const uint32_t* s = (const uint32_t*)(const void*)gVram;
+    uint32_t* d = (uint32_t*)(void*)sVramSwap;
+    for (uint32_t i = 0; i < 0x18000u / 4u; i++) {   /* per-byte nibble swap, 4 bytes/iter */
+        uint32_t w = s[i];
+        d[i] = ((w & 0x0F0F0F0Fu) << 4) | ((w & 0xF0F0F0F0u) >> 4);
+    }
+    data_cache_hit_writeback(sVramSwap, sizeof sVramSwap));
+    s_swap_gen = g_vram_gen;
+}
 
 static inline uint16_t bgr555_to_rgba5551(uint16_t c, int opaque) {
     unsigned r = c & 0x1Fu, g = (c >> 5) & 0x1Fu, b = (c >> 10) & 0x1Fu;
@@ -167,15 +216,10 @@ static void Port_N64_RDP_SetTexBlend(int blend, unsigned eva, unsigned evb) {
 static void Port_N64_RDP_RenderOBJ(unsigned dispcnt) {
     int obj_1d = (dispcnt >> 6) & 1;
     for (int i = 0; i < 256; i++)
-        sRdpTlut[i] = bgr555_to_rgba5551(sObjPlttBE[i], (i & 15) != 0);
-    data_cache_hit_writeback(sRdpTlut, sizeof sRdpTlut);
-    for (uint32_t i = 0; i < 0x8000u; i++) {
-        uint8_t v = gVram[0x10000u + i];
-        sCharScratch[i] = (uint8_t)((v >> 4) | (v << 4));
-    }
-    data_cache_hit_writeback(sCharScratch, 0x8000u);
-    surface_t objc = surface_make(sCharScratch, FMT_CI4, 8, (int)(0x8000u * 2u / 8u), 4);
-    rdpq_tex_upload_tlut(sRdpTlut, 0, 256);
+        sObjTlut[i] = bgr555_to_rgba5551(sObjPlttBE[i], (i & 15) != 0);
+    data_cache_hit_writeback(sObjTlut, sizeof sObjTlut);
+    surface_t objc = surface_make(sVramSwap + 0x10000, FMT_CI4, 8, (int)(0x8000u * 2u / 8u), 4);
+    rdpq_tex_upload_tlut(sObjTlut, 0, 256);
     for (int i = 127; i >= 0; i--) {   /* high OAM index first so index 0 ends on top */
         uint16_t a0 = gOamMem[i * 4 + 0], a1 = gOamMem[i * 4 + 1], a2 = gOamMem[i * 4 + 2];
         int affine = (a0 >> 8) & 1;
@@ -205,11 +249,12 @@ static void Port_N64_RDP_RenderOBJ(unsigned dispcnt) {
             }
         }
     }
-    rspq_wait();
 }
 
 static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
+    g_prof_swap_us = 0; g_prof_wait_us = 0;
+    Port_N64_RefreshCharSwap();   /* lazily re-nibble-swap VRAM only when it changed */
     for (int i = 0; i < 256; i++)
         sRdpTlut[i] = bgr555_to_rgba5551(sBgPlttBE[i], (i & 15) != 0);  /* bank idx0 = transparent */
     data_cache_hit_writeback(sRdpTlut, sizeof sRdpTlut);
@@ -289,12 +334,8 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
             continue;
         }
         uint32_t span = (char_base + 0x8000u <= 0x18000u) ? 0x8000u : (0x18000u - char_base);
-        for (uint32_t i = 0; i < span; i++) {
-            uint8_t v = gVram[char_base + i];
-            sCharScratch[i] = (uint8_t)((v >> 4) | (v << 4));
-        }
-        data_cache_hit_writeback(sCharScratch, span);
-        surface_t chars = surface_make(sCharScratch, FMT_CI4, 8, (int)(span * 2u / 8u), 4);
+        /* char data already nibble-swapped into the persistent sVramSwap cache */
+        surface_t chars = surface_make(sVramSwap + char_base, FMT_CI4, 8, (int)(span * 2u / 8u), 4);
         unsigned ntiles = span * 2u / 64u;          /* 8x8 CI4 tiles in the char block */
         /* Collect the 21x31 visible tiles, then batch TMEM uploads by (32-tile page x
          * palette) instead of per-tile. 32 tiles = 256 rows x 8B CI4 TMEM pitch = 2KB,
@@ -344,11 +385,10 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
                 }
             }
         }
-        rspq_wait();   /* RDP done with sCharScratch before the next BG overwrites it */
     }
     Port_N64_RDP_SetTexBlend(0, 0, 0);
     if (dispcnt & 0x1000u) Port_N64_RDP_RenderOBJ(dispcnt);   /* sprites on top */
-    rdpq_detach_wait();
+    PROF_WAIT(rdpq_detach_wait());
 }
 
 /* Does the RDP path render this frame correctly? It handles mode-0 tiled BGs (with
@@ -464,9 +504,10 @@ void Port_N64_VBlank(void) {
                 if (!aff && ((a0 >> 9) & 1)) continue;   /* hidden */
                 nobj++; if (aff) naff++; if ((a0 >> 13) & 1) n8++;
             }
-            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x bg1=%u,%u bg2=%u,%u obj=%d aff=%d 8bpp=%d KEYIN=%03x rus=%lu aud=%lu\n",
-                   s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, h1, v1, h2, v2, nobj, naff, n8,
-                   keyin, (unsigned long)s_render_us, s_audio_buffers);
+            extern uint64_t g_prof_swap_us, g_prof_wait_us;
+            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x obj=%d rus=%lu swap=%lu wait=%lu KEYIN=%03x\n",
+                   s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, nobj,
+                   (unsigned long)s_render_us, (unsigned long)g_prof_swap_us, (unsigned long)g_prof_wait_us, keyin);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
             for (int bg = 0; bg < 4; bg++) {

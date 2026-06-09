@@ -62,6 +62,21 @@ index 887757c9..ba762835 100644
      /*    */ } spriteOrientation;
      /*0x1c*/ u8 gustJarFlags; /**< Controls sfx and other things */
      /*0x1d*/ u8 gustJarTolerance; /**< Frames needed to pull off ground. */
+diff --git a/include/gba/macro.h b/include/gba/macro.h
+index a5dd886d..7281b3e3 100644
+--- a/include/gba/macro.h
++++ b/include/gba/macro.h
+@@ -68,6 +68,10 @@ static inline void port_DmaTransfer(const void* src_raw, uintptr_t dest_raw, u32
+         /* Copy mode */
+         memcpy(dest, src, totalBytes);
+     }
++#ifdef TMC_N64
++    /* fill mode writes VRAM via a direct loop (not memcpy/memset) -> dirty the char cache */
++    if ((const u8*)dest >= gVram && (const u8*)dest < gVram + 0x18000u) g_vram_gen++;
++#endif
+ }
+ 
+ #define DmaSet(dmaNum, src, dest, control) port_DmaTransfer((const void*)(src), (uintptr_t)(dest), (u32)(control))
 diff --git a/include/gba/types.h b/include/gba/types.h
 index 38540405..c0150f45 100644
 --- a/include/gba/types.h
@@ -281,8 +296,49 @@ index 1f2ad7b9..eae73595 100644
  #include <execinfo.h>
  #define PORT_HAVE_EXECINFO 1
  #else
+diff --git a/port/port_gba_mem.c b/port/port_gba_mem.c
+index 747dfdc3..ec3763ed 100644
+--- a/port/port_gba_mem.c
++++ b/port/port_gba_mem.c
+@@ -3,6 +3,12 @@
+ #include "port_audio.h"
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifdef TMC_N64
++extern u32 g_vram_gen;                 /* N64: bump on VRAM write -> lazy char-swap cache */
++#define N64_VRAM_DIRTY() (g_vram_gen++)
++#else
++#define N64_VRAM_DIRTY() ((void)0)
++#endif
+ 
+ #if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+@@ -35,6 +41,7 @@ void gba_write8(uint32_t addr, uint8_t v) {
+     }
+     if (addr >= 0x06000000u && addr < 0x06018000u) {
+         gVram[addr - 0x06000000u] = v;
++        N64_VRAM_DIRTY();
+         return;
+     }
+ 
+@@ -90,6 +97,7 @@ void gba_write16(uint32_t addr, uint16_t v) {
+         u32 off = addr - 0x06000000u;
+         gVram[off] = v & 0xFF;
+         gVram[off + 1] = (v >> 8) & 0xFF;
++        N64_VRAM_DIRTY();
+         return;
+     }
+     // OAM
+@@ -164,6 +172,7 @@ void gba_write32(uint32_t addr, uint32_t v) {
+         gVram[off + 1] = (v >> 8) & 0xFF;
+         gVram[off + 2] = (v >> 16) & 0xFF;
+         gVram[off + 3] = (v >> 24) & 0xFF;
++        N64_VRAM_DIRTY();
+         return;
+     }
+     if (addr >= 0x07000000u && addr < 0x070003FDu) {
 diff --git a/port/port_gba_mem.h b/port/port_gba_mem.h
-index fb8ee35b..b00f5b1a 100644
+index fb8ee35b..9863a832 100644
 --- a/port/port_gba_mem.h
 +++ b/port/port_gba_mem.h
 @@ -56,10 +56,26 @@ static inline void* gba_TryMemPtr(uint32_t addr) {
@@ -320,6 +376,42 @@ index fb8ee35b..b00f5b1a 100644
  }
  
  /*
+@@ -91,12 +108,20 @@ void* port_resolve_addr(uintptr_t val);
+ }
+ #endif
+ 
++#ifdef TMC_N64
++extern u32 g_vram_gen;   /* N64 lazy char-swap cache: bump when VRAM is written */
++#define N64_VRAM_DIRTY_ADDR(a) do { if ((u32)(a) >= 0x06000000u && (u32)(a) < 0x06018000u) g_vram_gen++; } while (0)
++#else
++#define N64_VRAM_DIRTY_ADDR(a) ((void)0)
++#endif
++
+ static inline void gba_MemClear(u32 addr, u32 size) {
+     void* ptr = gba_MemPtr(addr);
+     if (ptr != NULL) {
+         for (u32 i = 0; i < size; i++) {
+             ((u8*)ptr)[i] = 0;
+         }
++        N64_VRAM_DIRTY_ADDR(addr);
+     }
+ }
+ 
+@@ -107,6 +132,7 @@ static inline void gba_MemCopy(u32 srcAddr, u32 destAddr, u32 size) {
+         for (u32 i = 0; i < size; i++) {
+             ((u8*)dest)[i] = ((u8*)src)[i];
+         }
++        N64_VRAM_DIRTY_ADDR(destAddr);
+     }
+ }
+ 
+@@ -116,5 +142,6 @@ static inline void port_MemCopyToGBA(const void* src, u32 destAddr, u32 size) {
+         for (u32 i = 0; i < size; i++) {
+             ((u8*)dest)[i] = ((const u8*)src)[i];
+         }
++        N64_VRAM_DIRTY_ADDR(destAddr);
+     }
+ }
 diff --git a/port/port_linked_stubs.c b/port/port_linked_stubs.c
 index 1c42e0a5..cb553ad8 100644
 --- a/port/port_linked_stubs.c
