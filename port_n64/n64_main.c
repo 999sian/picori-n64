@@ -162,9 +162,11 @@ static uint16_t sRdpTlut[256]        __attribute__((aligned(16)));  /* BG TLUT *
 static uint16_t sObjTlut[256]        __attribute__((aligned(16)));  /* OBJ TLUT (separate -> no BG/OBJ race) */
 
 /* perf probe: time spent CPU-side nibble-swapping char data vs stalled in rspq_wait */
-uint64_t g_prof_swap_us, g_prof_wait_us;
+uint64_t g_prof_swap_us, g_prof_wait_us, g_prof_bg_us, g_prof_obj_us;
 #define PROF_SWAP(stmt) do { uint64_t _p = get_ticks_us(); stmt; g_prof_swap_us += get_ticks_us() - _p; } while (0)
 #define PROF_WAIT(stmt) do { uint64_t _p = get_ticks_us(); stmt; g_prof_wait_us += get_ticks_us() - _p; } while (0)
+#define PROF_BG(stmt)   do { uint64_t _p = get_ticks_us(); stmt; g_prof_bg_us  += get_ticks_us() - _p; } while (0)
+#define PROF_OBJ(stmt)  do { uint64_t _p = get_ticks_us(); stmt; g_prof_obj_us += get_ticks_us() - _p; } while (0)
 
 /* Persistent nibble-swapped CI4 mirror of VRAM. The GBA->CI4 nibble swap (and its
  * 96KB cache writeback) cost ~20ms/frame when redone every frame; instead keep a
@@ -253,7 +255,7 @@ static void Port_N64_RDP_RenderOBJ(unsigned dispcnt) {
 
 static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     unsigned dispcnt = *(volatile unsigned short*)(gIoMem + 0x00);
-    g_prof_swap_us = 0; g_prof_wait_us = 0;
+    g_prof_swap_us = 0; g_prof_wait_us = 0; g_prof_bg_us = 0; g_prof_obj_us = 0;
     Port_N64_RefreshCharSwap();   /* lazily re-nibble-swap VRAM only when it changed */
     for (int i = 0; i < 256; i++)
         sRdpTlut[i] = bgr555_to_rgba5551(sBgPlttBE[i], (i & 15) != 0);  /* bank idx0 = transparent */
@@ -289,6 +291,7 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
     for (int pr = 3; pr >= 0; pr--)
         for (int b = 3; b >= 0; b--)
             if (bgpri[b] == pr) bgord[bgn++] = b;
+    uint64_t _bg0 = get_ticks_us();
     for (int oi = 0; oi < 4; oi++) {
         int bg = bgord[oi];
         if (!(dispcnt & (0x100u << bg))) continue;
@@ -386,8 +389,9 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
             }
         }
     }
+    g_prof_bg_us = get_ticks_us() - _bg0;
     Port_N64_RDP_SetTexBlend(0, 0, 0);
-    if (dispcnt & 0x1000u) Port_N64_RDP_RenderOBJ(dispcnt);   /* sprites on top */
+    if (dispcnt & 0x1000u) PROF_OBJ(Port_N64_RDP_RenderOBJ(dispcnt));   /* sprites on top */
     PROF_WAIT(rdpq_detach_wait());
 }
 
@@ -501,13 +505,14 @@ void Port_N64_VBlank(void) {
             for (int i = 0; i < 128; i++) {
                 uint16_t a0 = gOamMem[i * 4 + 0];
                 int aff = (a0 >> 8) & 1;
-                if (!aff && ((a0 >> 9) & 1)) continue;   /* hidden */
+                if (!aff && ((a0 >> 9) & 1)) continue;
                 nobj++; if (aff) naff++; if ((a0 >> 13) & 1) n8++;
             }
-            extern uint64_t g_prof_swap_us, g_prof_wait_us;
-            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x obj=%d rus=%lu swap=%lu wait=%lu KEYIN=%03x\n",
+            extern uint64_t g_prof_swap_us, g_prof_wait_us, g_prof_bg_us, g_prof_obj_us;
+            debugf("[dbg] f=%u task=%u sub=%u dispcnt=%04x obj=%d rus=%lu bg=%lu obj_us=%lu swap=%lu wait=%lu\n",
                    s_dbgf, (unsigned)gMain.task, (unsigned)gMain.substate, dispcnt, nobj,
-                   (unsigned long)s_render_us, (unsigned long)g_prof_swap_us, (unsigned long)g_prof_wait_us, keyin);
+                   (unsigned long)s_render_us, (unsigned long)g_prof_bg_us, (unsigned long)g_prof_obj_us,
+                   (unsigned long)g_prof_swap_us, (unsigned long)g_prof_wait_us);
         }
         if (s_dbgf == 300u) {   /* #N64 bring-up: is each BG configured + its tilemap loaded? */
             for (int bg = 0; bg < 4; bg++) {
