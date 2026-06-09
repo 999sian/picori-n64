@@ -364,29 +364,42 @@ static void Port_N64_RDP_RenderFrame(surface_t* disp) {
                 nvis++;
             }
         }
-        for (unsigned pbase = 0; pbase < ntiles; pbase += 32u) {
-            unsigned pageH = (ntiles - pbase < 32u) ? (ntiles - pbase) : 32u;
-            unsigned palmask = 0;
+        /* Bucket the visible tiles by (char page, palette) with a counting sort, then
+         * walk them once — uploading each (page,palette) page to TMEM only when it
+         * changes. Replaces the old O(pages*palettes*nvis) rescan (~333k iters/BG on
+         * mostly-empty combos) with O(nvis). Same uploads + texrects; tiles occupy
+         * distinct 8x8 cells so the reorder is pixel-identical. */
+        static uint16_t order[21 * 31];
+        {
+            static int cnt[512];
+            for (int k = 0; k < 512; k++) cnt[k] = 0;
             for (int i = 0; i < nvis; i++)
-                if (vis[i].idx >= pbase && vis[i].idx < pbase + pageH)
-                    palmask |= 1u << vis[i].pal;
-            if (!palmask) continue;
-            surface_t pageSurf = surface_make_sub(&chars, 0, (int)pbase * 8, 8, (int)pageH * 8);
-            for (int pal = 0; pal < 16; pal++) {
-                if (!(palmask & (1u << (unsigned)pal))) continue;
+                cnt[((unsigned)(vis[i].idx >> 5) << 4) | vis[i].pal]++;
+            int acc = 0;
+            for (int k = 0; k < 512; k++) { int c = cnt[k]; cnt[k] = acc; acc += c; }
+            for (int i = 0; i < nvis; i++)
+                order[cnt[((unsigned)(vis[i].idx >> 5) << 4) | vis[i].pal]++] = (uint16_t)i;
+        }
+        int curkey = -1;
+        for (int o = 0; o < nvis; o++) {
+            int i = order[o];
+            unsigned page = (unsigned)vis[i].idx >> 5, pal = vis[i].pal;
+            int key = (int)((page << 4) | pal);
+            if (key != curkey) {
+                curkey = key;
+                unsigned pbase = page * 32u;
+                unsigned pageH = (ntiles - pbase < 32u) ? (ntiles - pbase) : 32u;
+                surface_t pageSurf = surface_make_sub(&chars, 0, (int)pbase * 8, 8, (int)pageH * 8);
                 rdpq_texparms_t parms = {0};
-                parms.palette = pal; parms.s.repeats = 1; parms.t.repeats = 1;
+                parms.palette = (int)pal; parms.s.repeats = 1; parms.t.repeats = 1;
                 rdpq_tex_upload(TILE0, &pageSurf, &parms);
-                for (int i = 0; i < nvis; i++) {
-                    if (vis[i].idx < pbase || vis[i].idx >= pbase + pageH || vis[i].pal != pal) continue;
-                    int t = (int)((unsigned)vis[i].idx - pbase) * 8;
-                    int hflip = vis[i].fl & 1, vflip = (vis[i].fl >> 1) & 1;
-                    int s0 = hflip ? 8 : 0, s1 = hflip ? 0 : 8;
-                    int t0 = t + (vflip ? 8 : 0), t1 = t + (vflip ? 0 : 8);
-                    rdpq_texture_rectangle_scaled(TILE0, vis[i].dx, vis[i].dy,
-                                                  vis[i].dx + 8, vis[i].dy + 8, s0, t0, s1, t1);
-                }
             }
+            int t = (int)((unsigned)vis[i].idx - page * 32u) * 8;
+            int hflip = vis[i].fl & 1, vflip = (vis[i].fl >> 1) & 1;
+            int s0 = hflip ? 8 : 0, s1 = hflip ? 0 : 8;
+            int t0 = t + (vflip ? 8 : 0), t1 = t + (vflip ? 0 : 8);
+            rdpq_texture_rectangle_scaled(TILE0, vis[i].dx, vis[i].dy,
+                                          vis[i].dx + 8, vis[i].dy + 8, s0, t0, s1, t1);
         }
     }
     g_prof_bg_us = get_ticks_us() - _bg0;
